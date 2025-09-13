@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 const { sendOTP } = require("../utils/sendOTP");
 const Wallet = require("../models/Wallet");
 const path = require("path");
-const Booking = require("../models/booking"); // Ensure the correct model is imported
+const Booking = require("../models/booking");
 const SubService = require("../models/SubService");
 const { uploadFile2 } = require("../middleware/aws");
 
