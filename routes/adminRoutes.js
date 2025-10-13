@@ -25,6 +25,7 @@ router.delete("/profile/:subadminId", adminAuth, adminController.deleteProfile);
 
 // Dashboard and analytics
 router.get("/dashboard", adminAuth, adminController.getDashboardAnalytics);
+router.get("/dashboard/counts", adminAuth, adminController.getDashboardCounts);
 
 // User Management
 router.get("/users", adminAuth, adminController.getAllUsers);

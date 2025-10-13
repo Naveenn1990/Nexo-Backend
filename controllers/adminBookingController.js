@@ -4,7 +4,49 @@ exports.getAllBookings = async (req, res) => {
     try {
         console.log('getAllBookings controller called');
 
-        // Step 1: Aggregate monthly booking counts
+        // Extract pagination parameters
+        const {
+            page = 1,
+            limit = 10,
+            status,
+            fromDate,
+            toDate,
+            sortBy = 'createdAt',
+            sortOrder = 'desc'
+        } = req.query;
+
+        // Convert to numbers
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
+
+        // Build query for filtering
+        const query = {};
+        
+        // Add status filter
+        if (status && status !== 'all') {
+            query.status = status;
+        }
+
+        // Add date range filter
+        if (fromDate || toDate) {
+            query.createdAt = {};
+            if (fromDate) {
+                query.createdAt.$gte = new Date(fromDate);
+            }
+            if (toDate) {
+                query.createdAt.$lte = new Date(toDate);
+            }
+        }
+
+        // Build sort object
+        const sort = {};
+        sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+        // Step 1: Get total count for pagination
+        const total = await Booking.countDocuments(query);
+
+        // Step 2: Aggregate monthly booking counts (for analytics)
         const monthlyCounts = await Booking.aggregate([
             {
                 $group: {
@@ -20,7 +62,7 @@ exports.getAllBookings = async (req, res) => {
             }
         ]);
 
-        // Step 2: Format the monthly data
+        // Step 3: Format the monthly data
         const monthWiseBookingCount = {};
         monthlyCounts.forEach(entry => {
             const monthName = new Date(entry._id.year, entry._id.month - 1)
@@ -28,42 +70,42 @@ exports.getAllBookings = async (req, res) => {
             monthWiseBookingCount[`${monthName} ${entry._id.year}`] = entry.count;
         });
 
-        // Step 3: Fetch all bookings
-        const bookings = await Booking.find()
-        .populate({
-            path: "user", // Populate user details
-            // select: 'name email phone profilePicture addresses' // Select specific fields
-          })
-          .populate({
-            path: "subService",
-            populate: {
-              path: "service", // SubService -> Service
-              populate: {
-                path: "subCategory", // Service -> SubCategory
+        // Step 4: Fetch bookings with pagination
+        const bookings = await Booking.find(query)
+            .populate({
+                path: "user", // Populate user details
+                select: 'name email phone profilePicture addresses'
+            })
+            .populate({
+                path: "subService",
                 populate: {
-                  path: "category", // SubCategory -> ServiceCategory
-                  select: "name",
+                    path: "service", // SubService -> Service
+                    populate: {
+                        path: "subCategory", // Service -> SubCategory
+                        populate: {
+                            path: "category", // SubCategory -> ServiceCategory
+                            select: "name",
+                        },
+                    },
                 },
-              },
-            },
-          })
-          .populate({
-            path: "partner", // Populate partner details
-          })
-          .populate({
-            path: "cart.product", // Populate product details inside cart
-          })
-          .populate({
-            path: "cart.addedByPartner", // Populate partner who added the product
-            select: "profile.name profile.email", // Select specific fields
-          })
-          .sort({ createdAt: -1 })
-          .lean(); // Convert to plain JS objects for better performance
-    
+            })
+            .populate({
+                path: "partner", // Populate partner details
+                select: 'profile.name profile.email profile.phone profilePicture'
+            })
+            .populate({
+                path: "cart.product", // Populate product details inside cart
+            })
+            .populate({
+                path: "cart.addedByPartner", // Populate partner who added the product
+                select: "profile.name profile.email", // Select specific fields
+            })
+            .sort(sort)
+            .skip(skip)
+            .limit(limitNum)
+            .lean(); // Convert to plain JS objects for better performance
 
-        // console.log('Raw bookings found:', bookings.length);
-
-        // Step 4: Format the bookings
+        // Step 5: Format the bookings
         const formattedBookings = bookings.map(booking => ({
             _id: booking._id,
             booking,
@@ -94,13 +136,28 @@ exports.getAllBookings = async (req, res) => {
             createdAt: booking.createdAt
         }));
 
+        // Calculate pagination info
+        const totalPages = Math.ceil(total / limitNum);
+        const hasNextPage = pageNum < totalPages;
+        const hasPrevPage = pageNum > 1;
+
         console.log('Formatted bookings:', formattedBookings.length);
 
         return res.status(200).json({
             success: true,
             monthlyBookingCount: monthWiseBookingCount,
             count: formattedBookings.length,
-            data: formattedBookings
+            data: formattedBookings,
+            pagination: {
+                currentPage: pageNum,
+                totalPages,
+                totalItems: total,
+                itemsPerPage: limitNum,
+                hasNextPage,
+                hasPrevPage,
+                startIndex: skip + 1,
+                endIndex: Math.min(skip + limitNum, total)
+            }
         });
 
     } catch (error) {

@@ -7,6 +7,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const ServiceCategory = require("../models/ServiceCategory");
 const Service = require("../models/Service");
+const SubService = require("../models/SubService");
 const path = require('path');
 const SubCategory = require("../models/SubCategory"); // Assuming SubCategory model is defined in a separate file
 const PartnerProfile = require("../models/PartnerProfile");
@@ -524,6 +525,173 @@ exports.getDashboardAnalytics = async (req, res) => {
   } catch (error) {
     console.error("Dashboard Analytics Error:", error);
     res.status(500).json({ message: "Error fetching dashboard analytics" });
+  }
+};
+
+// Get Dashboard Counts - Optimized for quick loading
+exports.getDashboardCounts = async (req, res) => {
+  try {
+    // Use Promise.all to fetch all counts in parallel for better performance
+    const [
+      usersCount,
+      partnersCount,
+      bookingsCount,
+      subServicesCount,
+      monthlyBookingData,
+      monthlyRevenueData,
+      bookingStats
+    ] = await Promise.all([
+      // Users count
+      User.countDocuments(),
+      
+      // Partners count
+      Partner.countDocuments(),
+      
+      // Bookings count
+      booking.countDocuments(),
+      
+      // Sub-services count (try both approaches)
+      Promise.all([
+        SubService.countDocuments().catch(() => 0),
+        Service.aggregate([
+          { $unwind: "$subServices" },
+          { $count: "total" }
+        ]).then(result => result[0]?.total || 0).catch(() => 0)
+      ]).then(([subServiceCount, embeddedCount]) => {
+        // Use the higher count or SubService count if available
+        return subServiceCount > 0 ? subServiceCount : embeddedCount;
+      }).catch(() => 0),
+      
+      // Monthly booking data for charts (last 6 months)
+      booking.aggregate([
+        {
+          $match: {
+            createdAt: {
+              $gte: new Date(new Date().setMonth(new Date().getMonth() - 6))
+            }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: "$createdAt" },
+              month: { $month: "$createdAt" }
+            },
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } }
+      ]),
+      
+      // Monthly revenue data for charts (last 6 months)
+      booking.aggregate([
+        {
+          $match: {
+            createdAt: {
+              $gte: new Date(new Date().setMonth(new Date().getMonth() - 6))
+            }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: "$createdAt" },
+              month: { $month: "$createdAt" }
+            },
+            revenue: { $sum: "$amount" }
+          }
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } }
+      ]),
+      
+      // Booking status statistics
+      booking.aggregate([
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+
+    // Process monthly data for charts
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    
+    // Create a map for quick lookup
+    const monthlyBookingMap = {};
+    monthlyBookingData.forEach(item => {
+      const monthKey = `${item._id.year}-${item._id.month}`;
+      monthlyBookingMap[monthKey] = item.count;
+    });
+    
+    const monthlyRevenueMap = {};
+    monthlyRevenueData.forEach(item => {
+      const monthKey = `${item._id.year}-${item._id.month}`;
+      monthlyRevenueMap[monthKey] = item.revenue || 0;
+    });
+
+    // Generate last 6 months data
+    const currentDate = new Date();
+    const lastSixMonths = [];
+    
+    for (let i = 5; i >= 0; i--) {
+      const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+      const monthKey = `${date.getFullYear()}-${date.getMonth() + 1}`;
+      const monthName = monthNames[date.getMonth()];
+      
+      lastSixMonths.push({
+        month: monthName,
+        bookings: monthlyBookingMap[monthKey] || 0,
+        revenue: monthlyRevenueMap[monthKey] || 0
+      });
+    }
+
+    // Process booking statistics
+    const bookingStatusStats = {
+      completed: 0,
+      pending: 0,
+      cancelled: 0,
+      total: bookingsCount
+    };
+    
+    bookingStats.forEach(stat => {
+      if (stat._id === 'completed') bookingStatusStats.completed = stat.count;
+      else if (stat._id === 'pending') bookingStatusStats.pending = stat.count;
+      else if (stat._id === 'cancelled') bookingStatusStats.cancelled = stat.count;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        counts: {
+          users: usersCount,
+          partners: partnersCount,
+          bookings: bookingsCount,
+          subServices: subServicesCount
+        },
+        charts: {
+          monthlyBookings: lastSixMonths.map(item => ({
+            month: item.month,
+            bookings: item.bookings
+          })),
+          monthlyRevenue: lastSixMonths.map(item => ({
+            month: item.month,
+            revenue: item.revenue
+          })),
+          bookingStats: [bookingStatusStats]
+        },
+        bookingStats: bookingStatusStats
+      }
+    });
+  } catch (error) {
+    console.error("Dashboard Counts Error:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error fetching dashboard counts",
+      error: error.message 
+    });
   }
 };
 
