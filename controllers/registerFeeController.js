@@ -4,6 +4,8 @@ const Joi = require('joi');
 // Validation schema
 const pricingValidationSchema = Joi.object({
   registrationFee: Joi.number().min(0).required(),
+  securityDeposit: Joi.number().min(0).required(),
+  toolkitPrice: Joi.number().min(0).required(),
   originalPrice: Joi.number().min(0).required(),
   specialOfferActive: Joi.boolean(),
   specialOfferText: Joi.string().allow(''),
@@ -27,20 +29,37 @@ const getPricingSettings = async (req, res) => {
     if (!settings) {
       // Create default settings if none exist
       settings = new PricingSettings({
-        registrationFee: 2000,
+        registrationFee: 500,
+        securityDeposit: 1000,
+        toolkitPrice: 2499,
         originalPrice: 3000,
         specialOfferActive: true,
         specialOfferText: "Get your services job commission-free under service amount 1000 with this plan",
         commissionRate: 15,
         freeCommissionThreshold: 1000,
-        refundPolicy: "Registration fees are non-refundable once payment is processed"
+        refundPolicy: "Registration fees are non-refundable once payment is processed",
+        registrationFeeRefundable: false,
+        securityDepositRefundable: false,
+        toolkitPriceRefundable: false
       });
       await settings.save();
     }
 
+    // Ensure refundable fields are always included and properly typed
+    const settingsObj = settings.toObject();
+    const responseData = {
+      ...settingsObj,
+      registrationFee: settingsObj.registrationFee || 500,
+      securityDeposit: settingsObj.securityDeposit || 1000,
+      toolkitPrice: settingsObj.toolkitPrice || 2499,
+      registrationFeeRefundable: settingsObj.registrationFeeRefundable !== undefined ? Boolean(settingsObj.registrationFeeRefundable) : false,
+      securityDepositRefundable: settingsObj.securityDepositRefundable !== undefined ? Boolean(settingsObj.securityDepositRefundable) : false,
+      toolkitPriceRefundable: settingsObj.toolkitPriceRefundable !== undefined ? Boolean(settingsObj.toolkitPriceRefundable) : false
+    };
+
     res.json({
       success: true,
-      data: settings
+      data: responseData
     });
   } catch (error) {
     res.status(500).json({

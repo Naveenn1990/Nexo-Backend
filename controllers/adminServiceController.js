@@ -10,6 +10,7 @@ const Product = require("../models/product");
 const Partner = require("../models/PartnerModel");
 const { uploadFile2, multifileUpload } = require('../middleware/aws');
 const PartnerWallet = require('../models/PartnerWallet');
+const MGPlan = require('../models/MGPlan');
 // Get all services
 exports.getAllServices = async (req, res) => {
   try {
@@ -232,9 +233,7 @@ exports.addSubService = async (req, res) => {
 // Update service category
 exports.updateServiceCategory = async (req, res) => {
   try {
-    const { name } = req.body;
-    let icon = req.file ? req.file.filename : undefined; // Handle uploaded file
-    // console.log(name, icon);
+    const { name, description, subtitle, icon, isActive } = req.body;
 
     // Find the existing category
     const existingCategory = await ServiceCategory.findById(req.params.categoryId);
@@ -247,8 +246,19 @@ exports.updateServiceCategory = async (req, res) => {
 
     // Prepare update object (only update fields that are provided)
     const updateData = {};
-    if (name) updateData.name = name; // Update only if name is provided
-    if (icon) updateData.icon =  await uploadFile2(req.file,"servicecategory") // Update only if icon is uploaded
+    if (name) updateData.name = name.trim();
+    if (description) updateData.description = description.trim();
+    if (subtitle) updateData.subtitle = subtitle.trim();
+    if (isActive !== undefined) updateData.isActive = isActive;
+    
+    // Handle icon update - support both file upload and emoji/string
+    if (req.file) {
+      // If file is uploaded, use file
+      updateData.icon = await uploadFile2(req.file, "servicecategory");
+    } else if (icon !== undefined) {
+      // If icon is provided as string (emoji), use it directly
+      updateData.icon = icon.trim();
+    }
 
     // Perform the update
     const category = await ServiceCategory.findByIdAndUpdate(
@@ -257,17 +267,17 @@ exports.updateServiceCategory = async (req, res) => {
       { new: true }
     );
 
-    // console.log(category, "category");
-
     res.json({
       success: true,
+      message: "Category updated successfully",
       data: category
     });
   } catch (error) {
     console.log(error, "error");
     res.status(500).json({
       success: false,
-      message: "Error updating service category"
+      message: "Error updating service category",
+      error: error.message
     });
   }
 };
@@ -352,28 +362,35 @@ exports.getServiceAnalytics = async (req, res) => {
 // Create category
 exports.createCategory = async (req, res) => {
     try {
-        // Validate required fields
-        if (!req.file) {
+        if (!req.body.name || !req.body.description || !req.body.subtitle) {
             return res.status(400).json({
                 success: false,
-                message: 'Icon file is required'
+                message: 'Name, description, and subtitle are required'
             });
         }
 
-        if (!req.body.name || !req.body.description) {
+        // Support both file upload and emoji/string icon
+        let iconValue = '';
+        if (req.file) {
+            // If file is uploaded, use file
+            iconValue = await uploadFile2(req.file, "servicecategory");
+        } else if (req.body.icon) {
+            // If icon is provided as string (emoji), use it directly
+            iconValue = req.body.icon.trim();
+        } else {
             return res.status(400).json({
                 success: false,
-                message: 'Name and description are required'
+                message: 'Icon is required (either upload a file or select an emoji icon)'
             });
         }
-        let image=await uploadFile2(req.file,"servicecategory")
-        // Create new category with just the filename
+
+        // Create new category
         const category = new ServiceCategory({
             name: req.body.name.trim(),
             description: req.body.description.trim(),
-            icon: image, // Store only the filename
-            status: 'active',
-            subtitle: req.body.subtitle.trim()
+            subtitle: req.body.subtitle.trim(),
+            icon: iconValue,
+            isActive: req.body.isActive !== undefined ? req.body.isActive : true
         });
 
         const savedCategory = await category.save();
@@ -1334,50 +1351,179 @@ exports.deletePartner = async (req, res) => {
 exports.updatePartnerProfile = async (req, res) => {
   try {
     let { id } = req.params;
-    let { name, email, phone,whatsappNumber } = req.body;
+    
+    // Handle both JSON and FormData
+    let bodyData = req.body
+    // If it's FormData, bodyData will already be parsed by multer
+    // If it's JSON, bodyData will be the parsed JSON
+    
+    let { 
+      name, 
+      email, 
+      phone, 
+      whatsappNumber,
+      qualification,
+      experience,
+      address,
+      landmark,
+      pincode,
+      city,
+      gstNumber,
+      referralCode,
+      categories,
+      categoryNames,
+      // Bank Details
+      accountHolderName,
+      accountNumber,
+      ifscCode,
+      bankName,
+      // KYC Status
+      kycStatus,
+      kycRemarks,
+      // Payment Info
+      registerAmount,
+      payId,
+      paidBy
+    } = bodyData;
+    
     let updatedPartner = await Partner.findById(id);
     if (!updatedPartner) {
       return res.status(404).json({
         success: false,
         message: "Partner not found."
       });
-      }
+    }
 
-      if(name) {
-        updatedPartner.profile.name = name; 
-        }
-      if(email &&updatedPartner.profile.email!== email.trim()) {
-        // Check if email already exists
-        const existingPartner = await Partner.findOne({ "profile.email": email.trim() });
-        if (existingPartner) {
-          return res.status(400).json({
-            success: false,
-            message: "Email already exists."
-            });
-        }
-        updatedPartner.profile.email = email.trim();
+    // Update profile fields
+    if (name) {
+      updatedPartner.profile.name = name; 
+    }
+    if (email && updatedPartner.profile.email !== email.trim()) {
+      // Check if email already exists
+      const existingPartner = await Partner.findOne({ "profile.email": email.trim(), _id: { $ne: id } });
+      if (existingPartner) {
+        return res.status(400).json({
+          success: false,
+          message: "Email already exists."
+        });
       }
-      if(phone && updatedPartner.phone !== phone.trim()) {
-        // Check if phone number already exists
-        const existingPartner = await Partner.findOne({ "phone": phone.trim() });
-        if (existingPartner) {
-          return res.status(400).json({
-            success: false,
-            message: "Phone number already exists."
-            });
-            }
-        updatedPartner.phone = phone.trim();
+      updatedPartner.profile.email = email.trim();
+    }
+    if (phone && updatedPartner.phone !== phone.trim()) {
+      // Check if phone number already exists
+      const existingPartner = await Partner.findOne({ "phone": phone.trim(), _id: { $ne: id } });
+      if (existingPartner) {
+        return res.status(400).json({
+          success: false,
+          message: "Phone number already exists."
+        });
       }
-      if(whatsappNumber && updatedPartner.whatsappNumber !== whatsappNumber.trim()) {
-        updatedPartner.whatsappNumber = whatsappNumber.trim();
+      updatedPartner.phone = phone.trim();
+    }
+    if (whatsappNumber !== undefined) {
+      updatedPartner.whatsappNumber = whatsappNumber.trim();
+    }
+    if (qualification !== undefined) {
+      updatedPartner.qualification = qualification;
+    }
+    if (experience !== undefined) {
+      updatedPartner.experience = experience ? parseInt(experience) : 0;
+    }
+    if (address !== undefined) {
+      updatedPartner.profile.address = address;
+    }
+    if (landmark !== undefined) {
+      updatedPartner.profile.landmark = landmark;
+    }
+    if (pincode !== undefined) {
+      updatedPartner.profile.pincode = pincode;
+    }
+    if (city !== undefined) {
+      updatedPartner.profile.city = city;
+    }
+    if (gstNumber !== undefined) {
+      updatedPartner.profile.gstNumber = gstNumber;
+      updatedPartner.gstNumber = gstNumber; // Also update top-level field
+    }
+    if (referralCode !== undefined) {
+      updatedPartner.referralCode = referralCode;
+    }
+    
+    // Handle profile image upload
+    if (req.file) {
+      // uploadFile2 is already imported at the top of the file from '../middleware/aws'
+      const profileImageUrl = await uploadFile2(req.file, 'partnerdoc')
+      if (profileImageUrl) {
+        if (!updatedPartner.profile) {
+          updatedPartner.profile = {}
         }
-      await updatedPartner.save();
-    res.status(200).json({
+        updatedPartner.profile.profileImage = profileImageUrl
+      }
+    }
+    
+    // Update categories
+    if (categories && Array.isArray(categories)) {
+      updatedPartner.category = categories;
+    }
+    if (categoryNames && Array.isArray(categoryNames)) {
+      updatedPartner.categoryNames = categoryNames;
+    }
+    
+    // Update Bank Details
+    if (!updatedPartner.bankDetails) {
+      updatedPartner.bankDetails = {};
+    }
+    if (accountHolderName !== undefined) {
+      updatedPartner.bankDetails.accountHolderName = accountHolderName;
+    }
+    if (accountNumber !== undefined) {
+      updatedPartner.bankDetails.accountNumber = accountNumber;
+    }
+    if (ifscCode !== undefined) {
+      updatedPartner.bankDetails.ifscCode = ifscCode;
+    }
+    if (bankName !== undefined) {
+      updatedPartner.bankDetails.bankName = bankName;
+    }
+    
+    // Update KYC Status
+    if (!updatedPartner.kyc) {
+      updatedPartner.kyc = {};
+    }
+    if (kycStatus !== undefined && kycStatus !== '') {
+      updatedPartner.kyc.status = kycStatus;
+    }
+    if (kycRemarks !== undefined) {
+      updatedPartner.kyc.remarks = kycRemarks;
+    }
+    
+    // Update Payment Info
+    if (registerAmount !== undefined && registerAmount !== '') {
+      updatedPartner.profile.registerAmount = parseFloat(registerAmount) || 0;
+    }
+    if (payId !== undefined) {
+      updatedPartner.profile.payId = payId;
+    }
+    if (paidBy !== undefined) {
+      updatedPartner.profile.paidBy = paidBy;
+    }
+    
+    await updatedPartner.save();
+    
+    // Return a clean response without circular references
+    const responseData = {
       success: true,
       message: "Partner profile updated successfully.",
-      data: updatedPartner
-      });
-  }catch (error) {
+      data: {
+        _id: updatedPartner._id,
+        name: updatedPartner.name,
+        email: updatedPartner.email,
+        phone: updatedPartner.phone
+      }
+    };
+    
+    res.status(200).json(responseData);
+  } catch (error) {
     console.error("Error updating partner profile:", error);
     res.status(500).json({
       success: false,
@@ -1393,25 +1539,32 @@ exports.updatePartnerProfile = async (req, res) => {
 exports.getPartnerEarnings = async (req, res) => {
     try {
         const { partnerId } = req.params;
-        // console.log("Request Params : " , req.params)
-        // Fetch all completed bookings for the partner
+
+        const partner = await Partner.findById(partnerId)
+            .populate('mgPlan')
+            .populate({
+                path: 'mgPlanHistory.plan',
+                select: 'name price leads commission leadFee minWalletBalance'
+            })
+            .lean();
+
+        if (!partner) {
+            return res.status(404).json({ message: "Partner not found." });
+        }
+
         const bookings = await Booking.find({ partner: partnerId, status: "completed" })
-            .populate("user", "name email")
+            .populate("user", "name email phone")
             .populate("subService", "name price commission")
             .populate("service", "name")
             .populate("subCategory", "name")
             .populate("category", "name")
-            .populate("partner", "profile.name profile.email");
-
-        if (!bookings.length) {
-            return res.status(404).json({ message: "No completed bookings found for this partner." });
-        }
+            .lean();
 
         let totalEarnings = 0;
-        let transactions = bookings.map(booking => {
+        const transactions = bookings.map(booking => {
             const subService = booking.subService;
-            const totalAmount = booking.amount;
-            const commissionAmount = ((subService?.commission||0) / 100) * totalAmount;
+            const totalAmount = booking.amount || 0;
+            const commissionAmount = ((subService?.commission || 0) / 100) * totalAmount;
             const partnerEarnings = totalAmount - commissionAmount;
             totalEarnings += partnerEarnings;
 
@@ -1423,7 +1576,7 @@ exports.getPartnerEarnings = async (req, res) => {
                 subCategory: booking.subCategory?.name,
                 category: booking.category?.name,
                 totalAmount,
-                commissionPercentage: subService?.commission||0,
+                commissionPercentage: subService?.commission || 0,
                 commissionAmount,
                 partnerEarnings,
                 paymentMode: booking.paymentMode,
@@ -1432,10 +1585,238 @@ exports.getPartnerEarnings = async (req, res) => {
             };
         });
 
-        res.json({ partnerId, totalEarnings, transactions });
+        const plan = partner.mgPlan;
+        const leadsGuaranteed = plan?.leads || 0;
+        const leadsUsed = partner.mgPlanLeadsUsed || 0;
+        const leadsRemaining = Math.max(leadsGuaranteed - leadsUsed, 0);
+        const leadFee = plan?.leadFee || 50;
+        const minWalletBalance = plan?.minWalletBalance || 20;
+        const now = new Date();
+        const isExpired = partner.mgPlanExpiresAt ? now > partner.mgPlanExpiresAt : false;
+
+        let refundStatus = 'pending';
+        const history = Array.isArray(partner.mgPlanHistory) ? partner.mgPlanHistory : [];
+        if (history.length) {
+            const latest = history[history.length - 1];
+            refundStatus = latest?.refundStatus || refundStatus;
+        }
+        if (isExpired && leadsUsed < leadsGuaranteed && refundStatus !== 'processed') {
+            refundStatus = 'eligible';
+        }
+
+        res.json({
+            partner: {
+                ...partner,
+                mgPlanSummary: {
+                    name: plan?.name || null,
+                    price: plan?.price || 0,
+                    commission: plan?.commission || 0,
+                    leadFee,
+                    minWalletBalance,
+                    leadsGuaranteed,
+                    leadsUsed,
+                    leadsRemaining,
+                    subscribedAt: partner.mgPlanSubscribedAt,
+                    expiresAt: partner.mgPlanExpiresAt,
+                    isExpired,
+                    refundStatus,
+                    history
+                }
+            },
+            totalEarnings,
+            transactions
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+exports.getPartnerServiceHubs = async (req, res) => {
+    try {
+        const { partnerId } = req.params;
+        const partner = await Partner.findById(partnerId).select('serviceHubs');
+        if (!partner) {
+            return res.status(404).json({ success: false, message: 'Partner not found' });
+        }
+        res.json({
+            success: true,
+            data: partner.serviceHubs || []
+        });
+    } catch (error) {
+        console.error('Get Partner Service Hubs Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch service hubs', error: error.message });
+    }
+};
+
+exports.createPartnerServiceHub = async (req, res) => {
+    try {
+        const { partnerId } = req.params;
+        const { name, pinCodes = [], services = [], isPrimary = false } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ success: false, message: 'Hub name is required' });
+        }
+
+        const partner = await Partner.findById(partnerId);
+        if (!partner) {
+            return res.status(404).json({ success: false, message: 'Partner not found' });
+        }
+
+        const normalizedPins = Array.from(
+            new Set(pinCodes.map((pin) => (pin || '').toString().trim()).filter((pin) => pin.length > 0))
+        );
+
+        if (!Array.isArray(partner.serviceHubs)) {
+            partner.serviceHubs = [];
+        }
+
+        partner.serviceHubs.push({
+            name,
+            pinCodes: normalizedPins,
+            services,
+            isPrimary: Boolean(isPrimary),
+            createdAt: new Date()
+        });
+
+        if (isPrimary) {
+            partner.serviceHubs = partner.serviceHubs.map((hub, idx, arr) => ({
+                ...hub,
+                isPrimary: idx === arr.length - 1
+            }));
+        }
+
+        await partner.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Service hub created successfully',
+            data: partner.serviceHubs
+        });
+    } catch (error) {
+        console.error('Create Service Hub Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to create service hub', error: error.message });
+    }
+};
+
+exports.updatePartnerServiceHub = async (req, res) => {
+    try {
+        const { partnerId, hubId } = req.params;
+        const { name, pinCodes = [], services = [], isPrimary } = req.body;
+
+        const partner = await Partner.findById(partnerId);
+        if (!partner) {
+            return res.status(404).json({ success: false, message: 'Partner not found' });
+        }
+
+        const hub = partner.serviceHubs.id(hubId);
+        if (!hub) {
+            return res.status(404).json({ success: false, message: 'Service hub not found' });
+        }
+
+        if (name) hub.name = name;
+        if (Array.isArray(pinCodes)) {
+            hub.pinCodes = Array.from(
+                new Set(pinCodes.map((pin) => (pin || '').toString().trim()).filter((pin) => pin.length > 0))
+            );
+        }
+        if (Array.isArray(services)) {
+            hub.services = services;
+        }
+        if (typeof isPrimary === 'boolean') {
+            hub.isPrimary = isPrimary;
+            if (isPrimary) {
+                partner.serviceHubs.forEach((h) => {
+                    if (h._id.toString() !== hubId) {
+                        h.isPrimary = false;
+                    }
+                });
+            }
+        }
+        hub.updatedAt = new Date();
+
+        await partner.save();
+
+        res.json({
+            success: true,
+            message: 'Service hub updated successfully',
+            data: partner.serviceHubs
+        });
+    } catch (error) {
+        console.error('Update Service Hub Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to update service hub', error: error.message });
+    }
+};
+
+exports.deletePartnerServiceHub = async (req, res) => {
+    try {
+        const { partnerId, hubId } = req.params;
+
+        const partner = await Partner.findById(partnerId);
+        if (!partner) {
+            return res.status(404).json({ success: false, message: 'Partner not found' });
+        }
+
+        const hub = partner.serviceHubs.id(hubId);
+        if (!hub) {
+            return res.status(404).json({ success: false, message: 'Service hub not found' });
+        }
+
+        // Use pull() method to remove the subdocument from the array
+        partner.serviceHubs.pull(hubId);
+        await partner.save();
+
+        res.json({
+            success: true,
+            message: 'Service hub removed successfully',
+            data: partner.serviceHubs
+        });
+    } catch (error) {
+        console.error('Delete Service Hub Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to remove service hub', error: error.message });
+    }
+};
+
+// Get all available service hubs (for partner selection during onboarding)
+exports.getAllAvailableServiceHubs = async (req, res) => {
+    try {
+        // Get all partners and collect all their hubs
+        const partners = await Partner.find({}).select('serviceHubs profile');
+        
+        const allHubs = [];
+        partners.forEach(partner => {
+            if (partner.serviceHubs && Array.isArray(partner.serviceHubs)) {
+                partner.serviceHubs.forEach(hub => {
+                    allHubs.push({
+                        _id: hub._id,
+                        name: hub.name,
+                        pinCodes: hub.pinCodes || [],
+                        isPrimary: hub.isPrimary || false,
+                        createdAt: hub.createdAt
+                    });
+                });
+            }
+        });
+
+        // Remove duplicates based on name and pinCodes combination
+        const uniqueHubs = [];
+        const seen = new Set();
+        
+        allHubs.forEach(hub => {
+            const key = `${hub.name}-${hub.pinCodes.sort().join(',')}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueHubs.push(hub);
+            }
+        });
+
+        res.json({
+            success: true,
+            data: uniqueHubs
+        });
+    } catch (error) {
+        console.error('Get All Available Service Hubs Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch available service hubs', error: error.message });
     }
 };
 

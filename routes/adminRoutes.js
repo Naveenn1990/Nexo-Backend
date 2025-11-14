@@ -7,12 +7,15 @@ const adminSettingsController = require("../controllers/adminSettingsController"
 const adminReportController = require("../controllers/adminReportController");
 const bannerController = require("../controllers/bannerController");
 const userServiceController = require("../controllers/userServiceController");
+const bookingController = require("../controllers/bookingController");
 const { upload, processFilePath } = require("../middleware/upload");
 const SubCategory = require("../models/SubCategory");
 const Product = require("../models/product");
 const ReviewController = require("../controllers/reviewController");
 const { addtransactionwalletadmin, getWalletByAdminId, completePaymentVendor, updatedDocuments } = require("../controllers/partnerAuthController");
 const { auth } = require("../middleware/partnerAuth");
+const mgPlanController = require('../controllers/mgPlanController');
+const feeManagementController = require('../controllers/feeManagementController');
 
 // Auth routes
 router.post("/login", adminController.loginAdmin);
@@ -58,8 +61,7 @@ router.put(
 router.post(
   "/service-category",
   adminAuth,
-  upload.single("icon"),
- 
+  upload.single("icon"), // Optional - only if file is uploaded
   adminServiceController.createCategory
 );
 router.get(
@@ -86,7 +88,6 @@ router.put(
   "/service-category/:categoryId",
   adminAuth,
   upload.single("icon"),
-
   adminServiceController.updateServiceCategory
 );
 router.delete(
@@ -203,6 +204,7 @@ router.put(
 
 
 router.put("/bookings/assign-partner", adminAuth, adminController.assignedbooking);
+router.post("/bookings/create", adminAuth, bookingController.createBooking);
 
 // Promotional Video Management
 router.post("/promovideo", adminAuth, upload.single("image"), bannerController.uploadPromovideo);
@@ -309,6 +311,10 @@ router.put(
   adminServiceController.updatePartnerStatus
 );
 
+// Fee Management
+router.get("/fees", adminAuth, feeManagementController.getFees);
+router.put("/fees", adminAuth, feeManagementController.updateFees);
+
 //get partner earnings
 router.get(
   "/partner/:partnerId/earnings",
@@ -323,6 +329,54 @@ router.get('/adminwallets/:id', adminAuth, getWalletByAdminId);
 router.put('/registrationfeeupdate',adminAuth,completePaymentVendor)
 router.put("/updatedDocuments",upload.any(),adminAuth,updatedDocuments);
 router.delete('/deletepartner/:partnerId', adminAuth, adminServiceController.deletePartner);
-router.put('/updatePartnerProfile/:id', adminAuth, adminServiceController.updatePartnerProfile);
+// Middleware to handle both JSON and multipart/form-data
+const handleUpdateProfile = (req, res, next) => {
+  const contentType = req.headers['content-type'] || ''
+  if (contentType.includes('multipart/form-data')) {
+    return upload.single('profileImage')(req, res, (err) => {
+      if (err) {
+        console.error('Multer error in handleUpdateProfile:', err)
+        return res.status(400).json({
+          success: false,
+          message: err.message || 'File upload error'
+        })
+      }
+      next()
+    })
+  }
+  // For JSON, just pass through - Express.json() will handle it
+  next()
+}
+
+router.put('/updatePartnerProfile/:id', adminAuth, handleUpdateProfile, adminServiceController.updatePartnerProfile);
 router.delete('/deletepartner1/:partnerId', auth, adminServiceController.deletePartner);
+
+// MG Plan Management (Admin)
+router.get('/mg-plans', adminAuth, mgPlanController.getAllPlans);
+router.get('/mg-plans/:planId', adminAuth, mgPlanController.getPlanById);
+router.post('/mg-plans', adminAuth, mgPlanController.createPlan);
+router.put('/mg-plans/:planId', adminAuth, mgPlanController.updatePlan);
+router.delete('/mg-plans/:planId', adminAuth, mgPlanController.deletePlan);
+
+router.get(
+  '/partners/:partnerId/service-hubs',
+  adminAuth,
+  adminServiceController.getPartnerServiceHubs
+);
+router.post(
+  '/partners/:partnerId/service-hubs',
+  adminAuth,
+  adminServiceController.createPartnerServiceHub
+);
+router.put(
+  '/partners/:partnerId/service-hubs/:hubId',
+  adminAuth,
+  adminServiceController.updatePartnerServiceHub
+);
+router.delete(
+  '/partners/:partnerId/service-hubs/:hubId',
+  adminAuth,
+  adminServiceController.deletePartnerServiceHub
+);
+
 module.exports = router;

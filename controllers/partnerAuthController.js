@@ -88,7 +88,7 @@ exports.updateTokenFmc = async (req, res) => {
 
 exports.completePaymentVendor = async (req, res) => {
   try {
-    let { id, registerAmount, payId, paidBy } = req.body;
+    let { id, registerAmount, payId, paidBy, terms } = req.body;
     let data = await Partner.findById(id || req.partner._id);
     if (!data) return res.status(200).json({ error: "Data not found" });
     if (registerAmount) {
@@ -100,6 +100,14 @@ exports.completePaymentVendor = async (req, res) => {
     }
     if (paidBy) {
       data.profile.paidBy = paidBy
+    }
+    // Save terms data if provided
+    if (terms) {
+      data.terms = {
+        accepted: terms.accepted || false,
+        signature: terms.signature || null,
+        acceptedAt: terms.acceptedAt || new Date()
+      };
     }
     data = await data.save();
     return res.status(200).json({ success: "Successfully completed transaction" })
@@ -293,6 +301,7 @@ exports.completeProfile = async (req, res) => {
       pincode,
       referralCode,
       city,
+      gstNumber,
     } = req.body;
 
     if (!name || !email) {
@@ -309,7 +318,7 @@ exports.completeProfile = async (req, res) => {
       {
         $set: {
           profileCompleted: false,
-          profile: { name, email, address, landmark, pincode, city },
+          profile: { name, email, address, landmark, pincode, city, gstNumber: gstNumber || '' },
           whatsappNumber,
           qualification,
           experience,
@@ -434,7 +443,7 @@ exports.updateLocation = async (req, res) => {
 //select service and category
 exports.selectCategoryAndServices = async (req, res) => {
   try {
-    const { partnerId, category, subcategory, service, modeOfService, drive, tempoTraveller } = req.body;
+    const { partnerId, category, categoryNames, subcategory, service, modeOfService, drive, tempoTraveller } = req.body;
     // console.log("resss", req.body);
 
 
@@ -444,7 +453,21 @@ exports.selectCategoryAndServices = async (req, res) => {
       drive,
       tempoTraveller
     }
-    if (!partnerId || (!category.length && !drive && !tempoTraveller)) {
+    
+    // Store category names if provided
+    if (categoryNames && Array.isArray(categoryNames) && categoryNames.length > 0) {
+      obj.categoryNames = categoryNames;
+    }
+    
+    // If category names are provided but not IDs, look up IDs from names
+    if (categoryNames && Array.isArray(categoryNames) && categoryNames.length > 0 && (!category || category.length === 0)) {
+      const categoryDocs = await ServiceCategory.find({ name: { $in: categoryNames } });
+      if (categoryDocs.length > 0) {
+        obj.category = categoryDocs.map(cat => cat._id);
+      }
+    }
+    
+    if (!partnerId || (!category?.length && !categoryNames?.length && !drive && !tempoTraveller)) {
       return res
         .status(400)
         .json({ success: false, message: "Please select your job preference" });
@@ -453,9 +476,9 @@ exports.selectCategoryAndServices = async (req, res) => {
     // console.log("subcategory : ", subcategory);
     // console.log("service : ", service);
 
-    if (category.length && (!subcategory.length || !service.length)) {
+    if ((category?.length || categoryNames?.length) && (!subcategory?.length || !service?.length)) {
       return res.status(400).json({ success: false, message: "Please select subcategory and service" });
-    } else if (category.length && subcategory.length && service.length) {
+    } else if ((category?.length || categoryNames?.length) && subcategory?.length && service?.length) {
       let serviceIds = Array.isArray(service) ? service : JSON.parse(service);
       // console.log("Service IDs to check:", serviceIds);
 
@@ -479,10 +502,12 @@ exports.selectCategoryAndServices = async (req, res) => {
           },
         });
       }
-      obj.category = category;
+      if (category && category.length > 0) {
+        obj.category = category;
+      }
       obj.subcategory = subcategory;
       obj.service = serviceIds;
-    } else if (!category.length && !subcategory.length && !service.length) {
+    } else if (!category?.length && !categoryNames?.length && !subcategory?.length && !service?.length) {
       obj.category = [];
       obj.subcategory = [];
       obj.service = [];
@@ -653,12 +678,45 @@ exports.completeKYC = async (req, res) => {
     // Log received files to debug missing fields
     // console.log("Uploaded Files:", req.files);
 
-    // Extract filenames safely
-    // const panCard = req.files?.panCard?.[0]?.filename || null;
-    // const aadhaar = req.files?.aadhaar?.[0]?.filename || null;
-    // const chequeImage = req.files?.chequeImage?.[0]?.filename || null;
-    // const drivingLicence = req.files?.drivingLicence?.[0]?.filename || null;
-    // const bill = req.files?.bill?.[0]?.filename || null;
+    // Extract filenames safely - Check if files exist before accessing
+    if (!req.files || !req.files.panCard || !req.files.panCard[0]) {
+      return res.status(400).json({
+        success: false,
+        message: "PAN Card is required",
+      });
+    }
+    if (!req.files.aadhaar || !req.files.aadhaar[0]) {
+      return res.status(400).json({
+        success: false,
+        message: "Aadhaar Card (Front) is required",
+      });
+    }
+    if (!req.files.aadhaarback || !req.files.aadhaarback[0]) {
+      return res.status(400).json({
+        success: false,
+        message: "Aadhaar Card (Back) is required",
+      });
+    }
+    if (!req.files.chequeImage || !req.files.chequeImage[0]) {
+      return res.status(400).json({
+        success: false,
+        message: "Cancelled Cheque is required",
+      });
+    }
+    if (!req.files.drivingLicence || !req.files.drivingLicence[0]) {
+      return res.status(400).json({
+        success: false,
+        message: "Driving Licence is required",
+      });
+    }
+    if (!req.files.bill || !req.files.bill[0]) {
+      return res.status(400).json({
+        success: false,
+        message: "Utility Bill is required",
+      });
+    }
+
+    // Upload files to AWS S3
     let panCard = await uploadFile2(req.files.panCard[0], "partnerdoc");
     let aadhaar = await uploadFile2(req.files.aadhaar[0], "partnerdoc");
     let chequeImage = await uploadFile2(req.files.chequeImage[0], "partnerdoc");
@@ -872,6 +930,7 @@ exports.getProfile = async (req, res) => {
         experience: profile.experience,
         subcategory: profile.subcategory,
         category: profile.category,
+        categoryNames: profile.categoryNames || [],
         service: profile.service,
         modeOfService: profile?.modeOfService || "offline",
         profilePicture: profile.profilePicture,
@@ -881,6 +940,29 @@ exports.getProfile = async (req, res) => {
         referralCode: profile.referralCode,
         referredBy: profile.referredBy,
         referredPartners: profile.referredPartners || [],
+        address: profile.profile?.address,
+        landmark: profile.profile?.landmark,
+        pincode: profile.profile?.pincode,
+        gstNumber: profile.profile?.gstNumber,
+        // Include KYC documents if they exist
+        kyc: profile.kyc ? {
+          panCard: profile.kyc.panCard || null,
+          aadhaar: profile.kyc.aadhaar || null,
+          aadhaarback: profile.kyc.aadhaarback || null,
+          chequeImage: profile.kyc.chequeImage || null,
+          drivingLicence: profile.kyc.drivingLicence || null,
+          bill: profile.kyc.bill || null,
+          status: profile.kyc.status || null,
+          remarks: profile.kyc.remarks || null
+        } : null,
+        // Include bank details if they exist
+        bankDetails: profile.bankDetails ? {
+          accountNumber: profile.bankDetails.accountNumber || null,
+          ifscCode: profile.bankDetails.ifscCode || null,
+          accountHolderName: profile.bankDetails.accountHolderName || null,
+          bankName: profile.bankDetails.bankName || null,
+          chequeImage: profile.bankDetails.chequeImage || null
+        } : null
       },
     });
   } catch (error) {
@@ -1001,28 +1083,72 @@ exports.getWallet = async (req, res) => {
     }
     const partnerId = new mongoose.Types.ObjectId(req.partner._id);
 
-    let data = await PartnerWallet.findOne({ partner: partnerId });
-    if (!data) {
-      // data = await PartnerWallet.create({ partner: partnerId });
-      await NotificationModel.create({
-        title: "New Wallet Alert",
-        userId: partnerId,
-        message: `You have top up your wallet and get jobs`,
-      })
-      return res
-        .status(200)
-        .json({ success: true, message: "Wallet details", data: { balance: 0, transactions: [] } });
+    let wallet = await PartnerWallet.findOne({ partner: partnerId });
+    if (!wallet) {
+      wallet = await PartnerWallet.create({
+        partner: partnerId,
+        balance: 0,
+        transactions: []
+      });
     }
-    if (data.balance < 100) {
-      await NotificationModel.create({
-        title: "New Wallet Alert",
-        userId: partnerId,
-        message: `Your wallet balance is low please top up your wallet and get jobs`,
-      })
+
+    const partner = await Partner.findById(partnerId).populate('mgPlan');
+    const plan = partner?.mgPlan;
+    const leadFee = plan?.leadFee ?? 50;
+    const minWalletBalance = plan?.minWalletBalance ?? 20;
+    const leadsGuaranteed = plan?.leads ?? 0;
+    const leadsUsed = partner?.mgPlanLeadsUsed ?? 0;
+    const leadsRemaining = Math.max(leadsGuaranteed - leadsUsed, 0);
+    const commission = plan?.commission ?? 0;
+    const now = new Date();
+    const isExpired = partner?.mgPlanExpiresAt ? now > partner.mgPlanExpiresAt : false;
+    const daysUntilRenewal = partner?.mgPlanExpiresAt 
+      ? Math.ceil((partner.mgPlanExpiresAt - now) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    const payload = {
+      balance: wallet.balance,
+      transactions: wallet.transactions,
+      leadFee,
+      minWalletBalance,
+      leadAcceptancePaused: partner?.leadAcceptancePaused ?? false,
+      mgPlan: plan ? {
+        name: plan.name,
+        price: plan.price,
+        leadsGuaranteed,
+        leadsUsed,
+        leadsRemaining,
+        commission,
+        leadFee,
+        minWalletBalance,
+        subscribedAt: partner.mgPlanSubscribedAt,
+        expiresAt: partner.mgPlanExpiresAt,
+        isExpired,
+        daysUntilRenewal: daysUntilRenewal > 0 ? daysUntilRenewal : 0,
+        needsRenewal: isExpired || daysUntilRenewal <= 7,
+        refundPolicy: plan.refundPolicy
+      } : null
+    };
+
+    if (wallet.balance < minWalletBalance) {
+      const wasPaused = partner?.leadAcceptancePaused;
+      partner.leadAcceptancePaused = true;
+      await partner.save();
+      if (!wasPaused) {
+        await NotificationModel.create({
+          title: "Wallet Low",
+          userId: partnerId,
+          message: `Your wallet balance is low (₹${wallet.balance}). Recharge to continue accepting leads.`,
+        });
+      }
+    } else if (partner && partner.leadAcceptancePaused) {
+      partner.leadAcceptancePaused = false;
+      await partner.save();
     }
+
     return res
       .status(200)
-      .json({ success: true, message: "Wallet details", data: data });
+      .json({ success: true, message: "Wallet details", data: payload });
   } catch (error) {
     console.log(error);
   }

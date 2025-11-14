@@ -5,7 +5,20 @@ const pricingSettingsSchema = new mongoose.Schema({
   registrationFee: {
     type: Number,
     required: true,
-    min: 0
+    min: 0,
+    default: 500
+  },
+  securityDeposit: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 1000
+  },
+  toolkitPrice: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 2499
   },
   originalPrice: {
     type: Number,
@@ -38,6 +51,18 @@ const pricingSettingsSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  registrationFeeRefundable: {
+    type: Boolean,
+    default: false
+  },
+  securityDepositRefundable: {
+    type: Boolean,
+    default: false
+  },
+  toolkitPriceRefundable: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

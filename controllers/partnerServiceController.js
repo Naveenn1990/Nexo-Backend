@@ -11,6 +11,7 @@ const User = require("../models/User");
 const Admin = require("../models/admin");
 const NotificationModel = require("../models/Notification");
 const PartnerWallet = require("../models/PartnerWallet");
+const MGPlan = require("../models/MGPlan");
 // Get all available services for partners
 const admin = require('firebase-admin');
 const { uploadFile2 } = require("../middleware/aws");
@@ -477,7 +478,12 @@ exports.updateServiceStatus = async (req, res) => {
 exports.getMatchingBookings = async (req, res) => {
   try {
     // Get partner's profile
-    const profile = await Partner.findOne({ _id: req.partner._id });
+    const profile = await Partner.findOne({ _id: req.partner._id })
+      .populate('mgPlan')
+      .populate({
+        path: 'serviceHubs.services',
+        select: 'name'
+      });
     // console.log("Profile:", profile);
 
     if (!profile) {
@@ -487,18 +493,26 @@ exports.getMatchingBookings = async (req, res) => {
       });
     }
 
-    const Wallet = await PartnerWallet.findOne({ partner: req.partner._id });
-    if (!Wallet) {
+    const wallet = await PartnerWallet.findOne({ partner: req.partner._id });
+    if (!wallet) {
       return res.status(400).json({
         success: false,
         message: "Partner wallet not found",
       });
     }
 
-    if (Wallet.balance < 500) {
+    const plan = profile?.mgPlan;
+    const minWalletBalance = plan?.minWalletBalance ?? DEFAULT_MIN_WALLET_BALANCE;
+
+    if (wallet.balance < minWalletBalance) {
+      profile.leadAcceptancePaused = true;
+      await profile.save();
       return res.status(400).json({
         success: false,
-        message: "Partner wallet balance is less than 500",
+        message: `Wallet balance low. Maintain at least ₹${minWalletBalance} to receive leads.`,
+        walletBalance: wallet.balance,
+        minWalletBalance,
+        leadAcceptancePaused: true
       });
     }
 
@@ -511,7 +525,26 @@ exports.getMatchingBookings = async (req, res) => {
     // Get partner's selected category, sub-category, and services
     const { category, subcategory, service } = profile;
 
-    if (!category || !subcategory || !service || service.length === 0) {
+    const serviceIds = new Set(
+      (Array.isArray(service) ? service : [])
+        .map((id) => id && id.toString())
+        .filter(Boolean)
+    );
+    const hubPinCodes = new Set();
+
+    if (Array.isArray(profile.serviceHubs) && profile.serviceHubs.length) {
+      profile.serviceHubs.forEach((hub) => {
+        (hub.pinCodes || []).forEach((pin) => {
+          if (pin) hubPinCodes.add(pin.toString().trim());
+        });
+        (hub.services || []).forEach((srv) => {
+          const sid = srv?._id ? srv._id.toString() : srv?.toString();
+          if (sid) serviceIds.add(sid);
+        });
+      });
+    }
+
+    if (!category || !subcategory || serviceIds.size === 0) {
       return res.status(400).json({
         success: false,
         message: "Partner category, sub-category, or services not set",
@@ -524,8 +557,8 @@ exports.getMatchingBookings = async (req, res) => {
 
     // Find sub-services that belong to the partner's selected services
     const subServices = await SubService.find({
-      service: { $in: service },
-    }).select("_id").sort({ updatedAt: -1 })
+      service: { $in: Array.from(serviceIds) },
+    }).select("_id service").sort({ updatedAt: -1 })
 
     if (!subServices || subServices.length === 0) {
       return res.status(400).json({
@@ -538,10 +571,16 @@ exports.getMatchingBookings = async (req, res) => {
     // console.log("Eligible Sub-Services:", subServiceIds);
 
     // Find bookings where sub-service matches the partner's selected service
-    const bookings = await Booking.find({
-      subService: { $in: subServiceIds }, // Only fetch relevant sub-services
+    const bookingQuery = {
+      subService: { $in: subServiceIds },
       status: { $in: ["pending"] },
-    })
+    };
+
+    if (hubPinCodes.size > 0) {
+      bookingQuery["location.pincode"] = { $in: Array.from(hubPinCodes) };
+    }
+
+    const bookings = await Booking.find(bookingQuery)
       .populate({
         path: "service",
         populate: {
@@ -579,37 +618,45 @@ exports.getMatchingBookings = async (req, res) => {
     // console.log("Found Bookings Count:", bookings.length);
 
     // Format the response
-    const formattedBookings = bookings.map((booking) => ({
-      bookingId: booking._id,
-      scheduledDate: booking.scheduledDate,
-      scheduledTime: booking.scheduledTime,
-      amount: booking.amount,
-      status: booking.status,
-      paymentStatus: booking.paymentStatus,
-      location: booking.location,
-      user: {
-        name: booking.user?.name || "N/A",
-        phone: booking.user?.phone || "N/A",
-        email: booking.user?.email || "N/A",
-      },
-      subService: {
-        name: booking.subService?.name || "N/A",
-        price: booking.subService?.price || 0,
-        duration: booking.subService?.duration || "N/A",
-        description: booking.subService?.description || "N/A",
-        acceptCharges: booking.subService?.acceptCharges || 0,
-      },
-      service: {
-        name: booking.service?.name || "N/A",
-      },
-      category: {
-        name: booking.category?.name || "N/A",
-      },
-      subCategory: {
-        name: booking.subCategory?.name || "N/A",
-      },
-      driveBookings,
-    }));
+    const formattedBookings = bookings.map((booking) => {
+      const bookingPin = (booking.location?.pincode || '').toString().trim();
+      const profilePin = (profile.profile?.pincode || '').toString().trim();
+      const hubMatch = hubPinCodes.size > 0 ? hubPinCodes.has(bookingPin) : true;
+      const profileMatch = profilePin ? bookingPin === profilePin : true;
+
+      return {
+        bookingId: booking._id,
+        scheduledDate: booking.scheduledDate,
+        scheduledTime: booking.scheduledTime,
+        amount: booking.amount,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        location: booking.location,
+        user: {
+          name: booking.user?.name || "N/A",
+          phone: booking.user?.phone || "N/A",
+          email: booking.user?.email || "N/A",
+        },
+        subService: {
+          name: booking.subService?.name || "N/A",
+          price: booking.subService?.price || 0,
+          duration: booking.subService?.duration || "N/A",
+          description: booking.subService?.description || "N/A",
+          acceptCharges: booking.subService?.acceptCharges || 0,
+        },
+        service: {
+          name: booking.service?.name || "N/A",
+        },
+        category: {
+          name: booking.category?.name || "N/A",
+        },
+        subCategory: {
+          name: booking.subCategory?.name || "N/A",
+        },
+        driveBookings,
+        pinCodeMatch: hubMatch && profileMatch
+      };
+    });
 
     res.json({
       success: true,
@@ -618,6 +665,15 @@ exports.getMatchingBookings = async (req, res) => {
         category,
         subcategory,
         service,
+        serviceHubs: profile.serviceHubs || [],
+        walletBalance: wallet.balance,
+        minWalletBalance,
+        leadAcceptancePaused: profile.leadAcceptancePaused,
+        mgPlan: plan ? {
+          name: plan.name,
+          leadFee: plan.leadFee,
+          minWalletBalance: plan.minWalletBalance
+        } : null
       },
       bookings: formattedBookings,
     });
@@ -631,49 +687,54 @@ exports.getMatchingBookings = async (req, res) => {
   }
 };
 
-async function deductWallet(updatedBooking, partner) {
-  try {
-    let data = await PartnerWallet.findOne({ partner: partner });
-    if (data && updatedBooking.subService.acceptCharges > 0) {
-      data.balance = data.balance - updatedBooking.subService.acceptCharges;
-      data.transactions.push({
-        type: "debit",
-        amount: updatedBooking.subService.acceptCharges,
-        description: `Job accepted fee for ${updatedBooking.subService.name}`,
-        reference: "",
-        balance: data.balance,
-      });
-      await data.save()
+const DEFAULT_LEAD_FEE = 50;
+const DEFAULT_MIN_WALLET_BALANCE = 20;
 
-      await NotificationModel.create({
-        userId: partner,
-        title: "Accepted Booking",
-        message: `Your booking for ${updatedBooking.subService.name} has been Accepted and job fee Rs.${updatedBooking.subService.acceptCharges} has been deducted!`,
+async function deductWallet(updatedBooking, partnerDoc, leadFee, minBalance) {
+  try {
+    let wallet = await PartnerWallet.findOne({ partner: partnerDoc._id });
+    if (!wallet) {
+      wallet = await PartnerWallet.create({
+        partner: partnerDoc._id,
+        balance: 0,
+        transactions: []
       });
     }
-    // io.to(updatedBooking.user._id).emit("booking accepted", {
-    //   message: `Your booking for ${updatedBooking.subService.name} has been Confirm!`,
-    //   booking: updatedBooking,
-    // });
 
-    // console.log(
-    //   `Emitted 'booking accepted' event to user ${updatedBooking?.user?._id}`
-    // );
-    // const user = await User.findById(updatedBooking?.user?._id);
-    // user.notifications.push({
-    //   message: `Your booking for ${updatedBooking.subService.name} has been Accepted!`,
-    //   booking: updatedBooking,
-    //   seen: false,
-    //   date: new Date(),
-    // });
+    const deductionAmount = leadFee ?? DEFAULT_LEAD_FEE;
+    wallet.balance = wallet.balance - deductionAmount;
+    if (wallet.balance < 0) {
+      wallet.balance = Math.round(wallet.balance * 100) / 100;
+    }
 
-    // user.save();
+    wallet.transactions.push({
+      type: "debit",
+      amount: deductionAmount,
+      description: `Lead acceptance fee for ${updatedBooking.subService?.name || 'service'}`,
+      reference: updatedBooking._id?.toString() || '',
+      balance: wallet.balance
+    });
+    await wallet.save();
+
+    if (wallet.balance < minBalance) {
+      partnerDoc.leadAcceptancePaused = true;
+    } else {
+      partnerDoc.leadAcceptancePaused = false;
+    }
+
+    if (updatedBooking.subService) {
+      updatedBooking.subService.acceptCharges = deductionAmount;
+    }
+
+    await NotificationModel.create({
+      userId: partnerDoc._id,
+      title: "Accepted Booking",
+      message: `Lead acceptance fee of ₹${deductionAmount} has been deducted. Current wallet balance: ₹${wallet.balance}.`
+    });
   } catch (error) {
-    console.log(error);
-
+    console.error("Wallet deduction error:", error);
   }
 }
-
 //accept booking
 exports.acceptBooking = async (req, res) => {
   try {
@@ -691,7 +752,7 @@ exports.acceptBooking = async (req, res) => {
     console.log("Booking ID:", bookingId);
 
     // Validate partner existence
-    const partner = await Partner.findById(partnerId);
+    const partner = await Partner.findById(partnerId).populate('mgPlan');
     if (!partner) {
       return res
         .status(404)
@@ -716,6 +777,85 @@ exports.acceptBooking = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "This booking has already been accepted or cancelled",
+      });
+    }
+
+    let planDetails = null;
+    if (partner.mgPlan && partner.mgPlan._id) {
+      planDetails = partner.mgPlan;
+    } else if (partner.mgPlan) {
+      planDetails = await MGPlan.findById(partner.mgPlan);
+    }
+
+    if (!planDetails) {
+      planDetails = await MGPlan.findOne({ isDefault: true, isActive: true });
+      if (!planDetails) {
+        planDetails = await MGPlan.findOne({ name: 'Silver', isActive: true });
+      }
+      if (planDetails) {
+        partner.mgPlan = planDetails._id;
+        partner.mgPlanLeadQuota = planDetails.leads;
+        partner.mgPlanLeadsUsed = partner.mgPlanLeadsUsed || 0;
+        partner.mgPlanSubscribedAt = partner.mgPlanSubscribedAt || new Date();
+        partner.mgPlanExpiresAt = partner.mgPlanExpiresAt || new Date(new Date().setMonth(new Date().getMonth() + 1));
+        if (!Array.isArray(partner.mgPlanHistory) || !partner.mgPlanHistory.length) {
+          partner.mgPlanHistory = [{
+            plan: planDetails._id,
+            planName: planDetails.name,
+            price: planDetails.price,
+            leadsGuaranteed: planDetails.leads,
+            commissionRate: planDetails.commission,
+            leadFee: planDetails.leadFee,
+            subscribedAt: partner.mgPlanSubscribedAt,
+            expiresAt: partner.mgPlanExpiresAt,
+            leadsConsumed: partner.mgPlanLeadsUsed || 0,
+            refundStatus: 'pending',
+            refundNotes: planDetails.refundPolicy
+          }];
+          partner.markModified('mgPlanHistory');
+        }
+      }
+    }
+
+    const leadFee = planDetails?.leadFee ?? DEFAULT_LEAD_FEE;
+    const minWalletBalance = planDetails?.minWalletBalance ?? DEFAULT_MIN_WALLET_BALANCE;
+    const leadsGuaranteed = planDetails?.leads ?? 0;
+    const leadsUsed = partner.mgPlanLeadsUsed ?? 0;
+
+    // Ensure MG plan quota and expiry
+    const now = new Date();
+    if (partner.mgPlanExpiresAt && now > partner.mgPlanExpiresAt) {
+      partner.leadAcceptancePaused = true;
+      await partner.save();
+      return res.status(403).json({
+        success: false,
+        message: 'MG plan period has expired. Renew your plan to continue accepting leads.'
+      });
+    }
+
+    if (leadsGuaranteed > 0 && leadsUsed >= leadsGuaranteed) {
+      partner.leadAcceptancePaused = true;
+      await partner.save();
+      return res.status(403).json({
+        success: false,
+        message: 'Lead quota exhausted for the current MG plan. Upgrade or renew your plan to continue accepting leads.'
+      });
+    }
+
+    let wallet = await PartnerWallet.findOne({ partner: partnerId });
+    const walletBalance = wallet?.balance ?? 0;
+    if (walletBalance < leadFee) {
+      const requiredTopUp = Math.max((minWalletBalance + leadFee) - walletBalance, minWalletBalance);
+      partner.leadAcceptancePaused = true;
+      await partner.save();
+      return res.status(402).json({
+        success: false,
+        message: `Your wallet balance is ₹${walletBalance}. Recharge to continue accepting leads.`,
+        walletBalance,
+        requiredTopUp,
+        suggestedTopUps: [500, 1000],
+        minWalletBalance,
+        leadFee
       });
     }
 
@@ -764,7 +904,30 @@ exports.acceptBooking = async (req, res) => {
     Booking.generateMissingOTPs()
 
 
-    deductWallet(updatedBooking, partnerId);
+    // Deduct wallet with MG plan rules
+    await deductWallet(updatedBooking, partner, leadFee, minWalletBalance);
+
+    // Update MG plan usage
+    if (planDetails) {
+      partner.mgPlanLeadsUsed = (partner.mgPlanLeadsUsed || 0) + 1;
+      partner.mgPlanLeadQuota = planDetails.leads;
+      const history = Array.isArray(partner.mgPlanHistory) ? partner.mgPlanHistory : [];
+      if (history.length) {
+        const latestEntry = history[history.length - 1];
+        const currentPlanId = planDetails._id?.toString();
+        if (!latestEntry.plan || latestEntry.plan.toString() === currentPlanId) {
+          latestEntry.leadsConsumed = (latestEntry.leadsConsumed || 0) + 1;
+        } else {
+          const matchedEntry = history.find((entry) => entry.plan && entry.plan.toString() === currentPlanId);
+          if (matchedEntry) {
+            matchedEntry.leadsConsumed = (matchedEntry.leadsConsumed || 0) + 1;
+          }
+        }
+        partner.markModified('mgPlanHistory');
+      }
+    }
+
+    await partner.save();
 
     res.status(200).json({
       success: true,

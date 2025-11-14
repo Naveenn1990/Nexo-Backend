@@ -48,6 +48,10 @@ const partnerSchema = new mongoose.Schema(
         },
       },
     ],
+    categoryNames: {
+      type: [String],
+      default: []
+    },
     subcategory: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -144,6 +148,11 @@ const partnerSchema = new mongoose.Schema(
       city: {
         type: String,
       },
+      gstNumber: {
+        type: String,
+        trim: true,
+        uppercase: true,
+      },
     },
     profilePicture: String,
 
@@ -210,6 +219,93 @@ const partnerSchema = new mongoose.Schema(
       name: String,
       phone: String,
     }],
+    // MG Plan subscription
+    mgPlan: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "MGPlan",
+      default: null
+    },
+    mgPlanSubscribedAt: {
+      type: Date,
+      default: null
+    },
+    mgPlanExpiresAt: {
+      type: Date,
+      default: null
+    },
+    mgPlanLeadQuota: {
+      type: Number,
+      default: 0
+    },
+    mgPlanLeadsUsed: {
+      type: Number,
+      default: 0
+    },
+    mgPlanHistory: {
+      type: [
+        {
+          plan: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "MGPlan"
+          },
+          planName: String,
+          price: Number,
+          leadsGuaranteed: Number,
+          commissionRate: Number,
+          leadFee: Number,
+          subscribedAt: Date,
+          expiresAt: Date,
+          leadsConsumed: {
+            type: Number,
+            default: 0
+          },
+          refundStatus: {
+            type: String,
+            enum: ['pending', 'eligible', 'processed', 'expired'],
+            default: 'pending'
+          },
+          refundNotes: String
+        }
+      ],
+      default: []
+    },
+    leadAcceptancePaused: {
+      type: Boolean,
+      default: false
+    },
+    serviceHubs: {
+      type: [
+        {
+          _id: { type: mongoose.Schema.Types.ObjectId, auto: true },
+          name: { type: String, required: true, trim: true },
+          pinCodes: {
+            type: [String],
+            default: [],
+            set: (pins) =>
+              Array.from(
+                new Set(
+                  (pins || [])
+                    .map((pin) => (pin || '').toString().trim())
+                    .filter((pin) => pin.length > 0)
+                )
+              )
+          },
+          services: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Service"
+          }],
+          isPrimary: {
+            type: Boolean,
+            default: false
+          },
+          createdAt: {
+            type: Date,
+            default: Date.now
+          }
+        }
+      ],
+      default: []
+    },
     // Add Reviews Field
     reviews: [
       {
@@ -220,6 +316,21 @@ const partnerSchema = new mongoose.Schema(
         createdAt: { type: Date, default: Date.now },
       },
     ],
+    // Terms & Conditions acceptance
+    terms: {
+      accepted: {
+        type: Boolean,
+        default: false
+      },
+      signature: {
+        type: String, // Base64 image or file path
+        default: null
+      },
+      acceptedAt: {
+        type: Date,
+        default: null
+      }
+    },
   },
   { timestamps: true }
 );

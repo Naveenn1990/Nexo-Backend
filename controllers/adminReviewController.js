@@ -1,4 +1,4 @@
-const Review = require('../models/Review'); // Adjust the path as necessary
+ const Review = require('../models/Review'); // Adjust the path as necessary
 
 exports.getAllReviews = async (req, res) => {
     try {

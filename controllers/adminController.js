@@ -17,29 +17,6 @@ const Notification = require("../models/Notification");
 const dayjs = require("dayjs");
 
 
-// Admin login
-// exports.loginAdmin = async (req, res) => {
-//   try {
-//     const { email, password } = req.body;
-
-//     const admin = await Admin.findOne({ email });
-//     if (!admin || !(await bcrypt.compare(password, admin.password))) {
-//       return res.status(401).json({ message: "Invalid credentials" });
-//     }
-
-//     const token = jwt.sign({ adminId: admin._id }, process.env.JWT_SECRET, {
-//       expiresIn: "7d",
-//     });
-
-//     res.json({
-//       token,
-//       admin 
-//     });
-//   } catch (error) {
-//     console.error("Admin Login Error:", error);
-//     res.status(500).json({ message: "Login failed" });
-//   }
-// };
 
 exports.loginAdmin = async (req, res) => {
   try {
@@ -90,50 +67,7 @@ exports.loginAdmin = async (req, res) => {
   }
 };
 
-// Create new admin (super_admin only)
-// exports.createAdmin = async (req, res) => {
-//   try {
-//     // Check if requester is super_admin
-//     if (req.admin.role !== "super_admin") {
-//       return res.status(403).json({ message: "Not authorized" });
-//     }
 
-//     const { email, password, name, permissions } = req.body;
-
-//     // Check if admin already exists
-//     const existingAdmin = await Admin.findOne({ email });
-//     if (existingAdmin) {
-//       return res.status(400).json({ message: "Admin already exists" });
-//     }
-
-//     // Hash password
-//     const hashedPassword = await bcrypt.hash(password, 12);
-
-//     // Create new admin
-//     const admin = new Admin({
-//       email,
-//       password: hashedPassword,
-//       name,
-//       permissions,
-//       role: "subadmin", // New admins are always regular admins
-//     });
-
-//     await admin.save();
-
-//     res.status(201).json({
-//       message: "Admin created successfully",
-//       admin: {
-//         name: admin.name,
-//         email: admin.email,
-//         role: admin.role,
-//         permissions: admin.permissions,
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Create Admin Error:", error);
-//     res.status(500).json({ message: "Error creating admin" });
-//   }
-// };
 
 exports.createMainAdmin = async (req, res) => {
   try {
@@ -802,6 +736,7 @@ exports.getAllPartners = async (req, res) => {
       .populate("subcategory")
       .populate("service")
       .populate("kyc")
+      .populate("mgPlan", "name price leads commission leadFee minWalletBalance")
       .populate("reviews.user", "name email")
       .populate("reviews.booking")
       .select("-tempOTP")
@@ -901,6 +836,11 @@ exports.getAllPartners = async (req, res) => {
           registerAmount: partner.profile?.registerAmount || 0,
           payId: partner.profile?.payId || "N/A",
           paidBy: partner.profile?.paidBy || "N/A",
+          mgPlan: partner.mgPlan || null,
+          mgPlanLeadQuota: partner.mgPlanLeadQuota || 0,
+          mgPlanLeadsUsed: partner.mgPlanLeadsUsed || 0,
+          mgPlanSubscribedAt: partner.mgPlanSubscribedAt || null,
+          mgPlanExpiresAt: partner.mgPlanExpiresAt || null,
         };
       })
     );
@@ -919,7 +859,7 @@ exports.getPartnerDetails = async (req, res) => {
   try {
     const { partnerId } = req.params;
 
-    // Fetch partner details
+    // Fetch partner details with all populated data
     const partner = await Partner.findById(partnerId)
       .select("-tempOTP")
       .populate({
@@ -950,16 +890,20 @@ exports.getPartnerDetails = async (req, res) => {
         ],
       })
       .populate({
-        path: "user",
-        select: "name phone email",
+        path: "category",
+        select: "name description icon",
       })
       .populate({
-        path: "subService",
-        select: "name price duration description",
+        path: "subcategory",
+        select: "name description",
       })
       .populate({
         path: "service",
-        select: "name",
+        select: "name description basePrice duration",
+      })
+      .populate({
+        path: "mgPlan",
+        select: "name price leads commission leadFee minWalletBalance refundPolicy validityType validityMonths",
       })
       .select("-__v");
 
@@ -997,7 +941,15 @@ exports.getPartnerDetails = async (req, res) => {
       };
     });
 
-    res.json({ partner, totalEarnings, transactions });
+    // Include terms data if it exists
+    const partnerData = partner.toObject();
+    if (partnerData.terms) {
+      partnerData.terms = partnerData.terms;
+    } else if (partnerData.partnerTerms) {
+      partnerData.terms = partnerData.partnerTerms;
+    }
+    
+    res.json({ partner: partnerData, totalEarnings, transactions });
   } catch (error) {
     console.error("Get Partner Details Error:", error);
     res.status(500).json({ message: "Error fetching partner details" });
@@ -1353,84 +1305,6 @@ exports.getServicesByCategory = async (req, res) => {
   }
 };
 
-// Get all users without pagination limit
-// exports.getAllUsers = async (req, res) => {
-//   try {
-//     const { search, status, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
-
-//     // Build query
-//     const query = {};
-
-//     // Add search filter
-//     if (search) {
-//       query.$or = [
-//         { name: { $regex: search, $options: 'i' } },
-//         { email: { $regex: search, $options: 'i' } },
-//         { phone: { $regex: search, $options: 'i' } }
-//       ];
-//     }
-
-//     // Add status filter
-//     if (status) {
-//       query.status = status;
-//     }
-
-//     // Build sort object
-//     const sort = {};
-//     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-
-//     // Get all users without pagination
-//     const users = await User.find(query)
-//       .select('name email phone addresses status selectedAddress createdAt')
-//       .sort(sort);
-
-//     // Get total count
-//     const total = await User.countDocuments(query);
-
-//     // Get booking counts for each user
-//     const userIds = users.map(user => user._id);
-//     const bookingCounts = await booking.aggregate([
-//       { $match: { user: { $in: userIds } } },
-//       { $group: { _id: '$user', count: { $sum: 1 } } }
-//     ]);
-
-//     // Create a map of user ID to booking count
-//     const bookingCountMap = {};
-//     bookingCounts.forEach(item => {
-//       bookingCountMap[item._id] = item.count;
-//     });
-
-//     // Format the response
-//     const formattedUsers = users.map((user, index) => ({
-//       slNo: index + 1,
-//       _id: user._id,
-//       customerName: user.name,
-//       phoneNo: user.phone,
-//       email: user.email,
-//       address: user.addresses||"N/A",
-//       noOfBookings: bookingCountMap[user._id] || 0,
-//       accountStatus: user.status,
-//       createdAt: user.createdAt,
-//       selectedAddress: user?.selectedAddress|| 'N/A'
-
-//     }));
-
-//     res.json({
-//       success: true,
-//       data: formattedUsers,
-//       total,
-//       message: "Users fetched successfully"
-//     });
-
-//   } catch (error) {
-//     console.error("Get All Users Error:", error);
-//     res.status(500).json({
-//       success: false,
-//       message: "Error fetching users",
-//       error: error.message
-//     });
-//   }
-// };
 exports.getAllUsers = async (req, res) => {
   try {
     const { 
@@ -1825,14 +1699,7 @@ exports.deleteSubCategory = async (req, res) => {
       });
     }
 
-    // Check if category has any active services
-    // const activeServices = await Service.find({ category: req.params.categoryId, status: 'active' });
-    // if (activeServices.length > 0) {
-    //   return res.status(400).json({
-    //     success: false,
-    //     message: "Cannot delete category with active services"
-    //   });
-    // }
+
 
     // Use findByIdAndDelete instead of remove()
     await SubCategory.findByIdAndDelete(req.params.subcategoryId);

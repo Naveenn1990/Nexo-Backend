@@ -147,6 +147,22 @@ router.post(
 router.put("/kyc/:partnerId/status", adminAuth, updateKYCStatus);
 
 router.get('/referralcode/:referralCode',auth,partnerAuthController.getReferralCode);
+
+// Partner Service Hub Routes (Protected)
+const adminServiceController = require("../controllers/adminServiceController");
+router.get("/service-hubs/available", auth, adminServiceController.getAllAvailableServiceHubs);
+router.post("/service-hubs", auth, async (req, res) => {
+  try {
+    // Use the same controller but get partnerId from req.partner
+    const partnerId = req.partner._id.toString();
+    req.params.partnerId = partnerId;
+    return adminServiceController.createPartnerServiceHub(req, res);
+  } catch (error) {
+    console.error('Partner Service Hub Creation Error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create service hub', error: error.message });
+  }
+});
+
 // Partner Service Routes (Protected)
 router.get("/services/available", auth, getAvailableServices);
 router.post("/services/select", auth, selectService);
@@ -289,5 +305,12 @@ router.get("/getByDriver",auth,getByDriverId);
 router.post("/sendOtpWithNotification", auth, sendOtpWithNotification);
 router.post("/verifyOtpbooking", auth, verifyOtpbooking);
 router.post("/sendSmsOtp", auth, sendSmsOtp);
+
+// MG Plan Routes (Partner)
+const mgPlanController = require('../controllers/mgPlanController');
+router.get("/mg-plans", auth, mgPlanController.getAllPlans);
+router.get("/mg-plans/current", auth, mgPlanController.getPartnerPlan);
+router.post("/mg-plans/subscribe", auth, mgPlanController.subscribeToPlan);
+router.post("/mg-plans/renew", auth, mgPlanController.renewPlan);
 
 module.exports = router;
