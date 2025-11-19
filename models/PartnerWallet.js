@@ -19,7 +19,18 @@ const transactionSchema = new mongoose.Schema({
   },
   transactionId: {
     type: String,
-    unique: true
+    sparse: true
+    // Removed unique: true to prevent duplicate key errors with null values
+    // Uniqueness is ensured by the pre-save hook that generates unique IDs
+    // sparse: true allows multiple null values while still allowing unique non-null values
+  },
+  teamMember: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "TeamMember", // Team member who generated this transaction
+  },
+  booking: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Booking", // Associated booking if transaction is from a booking
   }
 }, { timestamps: true });
 
@@ -92,12 +103,14 @@ partnerWalletSchema.pre('save', async function (next) {
 partnerWalletSchema.pre('save', async function (next) {
   const wallet = this;
 
-  if (!wallet.isModified('transactions')) return next();
-
   try {
-    for (let txn of wallet.transactions) {
-      if (!txn.transactionId) {
-        txn.transactionId = await generateUniqueTransactionId();
+    // Always check transactions, whether new or modified
+    if (wallet.transactions && wallet.transactions.length > 0) {
+      for (let txn of wallet.transactions) {
+        // Generate transactionId if it doesn't exist or is null/undefined
+        if (!txn.transactionId || txn.transactionId === null || txn.transactionId === undefined) {
+          txn.transactionId = await generateUniqueTransactionId();
+        }
       }
     }
 

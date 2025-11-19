@@ -371,7 +371,7 @@ exports.sendLoginOTP = async (req, res) => {
     console.log(`OTP generated for ${phone}: ${otp}`); // For debugging
 
     // Send OTP
-    await sendOTP(phone, otp);
+    // await sendOTP(phone, otp);
 
     res.json({
       success: true,
@@ -480,7 +480,7 @@ exports.sendForgotPasswordOTP = async (req, res) => {
     console.log(`Forgot password OTP generated for ${phone}: ${otp}`); // For debugging
 
     // Send OTP
-    await sendOTP(phone, otp);
+    // await sendOTP(phone, otp);
 
     res.json({
       success: true,

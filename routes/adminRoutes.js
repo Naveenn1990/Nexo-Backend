@@ -12,10 +12,16 @@ const { upload, processFilePath } = require("../middleware/upload");
 const SubCategory = require("../models/SubCategory");
 const Product = require("../models/product");
 const ReviewController = require("../controllers/reviewController");
-const { addtransactionwalletadmin, getWalletByAdminId, completePaymentVendor, updatedDocuments } = require("../controllers/partnerAuthController");
+const { addtransactionwalletadmin, getWalletByAdminId, completePaymentVendor, updatedDocuments, getAllwalletTransaction } = require("../controllers/partnerAuthController");
 const { auth } = require("../middleware/partnerAuth");
 const mgPlanController = require('../controllers/mgPlanController');
 const feeManagementController = require('../controllers/feeManagementController');
+const adminPopularServiceController = require('../controllers/adminPopularServiceController');
+const leadController = require('../controllers/leadController');
+const subscriptionPlanController = require('../controllers/subscriptionPlanController');
+const featuredReviewController = require('../controllers/featuredReviewController');
+const materialCategoryController = require('../controllers/materialCategoryController');
+const inventoryController = require('../controllers/inventoryController');
 
 // Auth routes
 router.post("/login", adminController.loginAdmin);
@@ -204,6 +210,7 @@ router.put(
 
 
 router.put("/bookings/assign-partner", adminAuth, adminController.assignedbooking);
+router.get("/team-members", adminAuth, adminController.getAllTeamMembers);
 router.post("/bookings/create", adminAuth, bookingController.createBooking);
 
 // Promotional Video Management
@@ -276,10 +283,25 @@ router.get(
 );
 router.get("/reports/users", adminAuth, adminReportController.getUserAnalytics);
 router.get(
+  "/reports/category-revenue",
+  adminAuth,
+  adminReportController.getCategoryRevenue
+);
+router.get(
   "/reports/transactions",
   adminAuth,
   adminReportController.getTransactionReport
 );
+
+// Lead Management routes
+router.get("/leads", adminAuth, leadController.getAllLeads);
+router.get("/leads/analytics", adminAuth, leadController.getLeadAnalytics);
+router.get("/leads/bids", adminAuth, leadController.getAllBids);
+router.post("/leads/create", adminAuth, leadController.createLeadFromBooking);
+router.post("/leads/create-manual", adminAuth, leadController.createManualLead);
+router.post("/leads/sync", adminAuth, leadController.syncBookingsToLeads);
+router.put("/leads/:leadId/status", adminAuth, leadController.updateLeadStatus);
+router.post("/leads/accept-bid", adminAuth, leadController.acceptBid);
 
 // Get all categories with sub-categories, services, and sub-services
 router.get(
@@ -326,7 +348,9 @@ router.get("/contactus", adminAuth, ReviewController.getAllContactUs);
 // Add a new wallet partner
 router.put('/partner/addwallets',adminAuth,addtransactionwalletadmin );
 router.get('/adminwallets/:id', adminAuth, getWalletByAdminId);
+router.get('/wallet-transactions', adminAuth, getAllwalletTransaction);
 router.put('/registrationfeeupdate',adminAuth,completePaymentVendor)
+router.get('/fee-transactions', adminAuth, adminController.getAllFeeTransactions);
 router.put("/updatedDocuments",upload.any(),adminAuth,updatedDocuments);
 router.delete('/deletepartner/:partnerId', adminAuth, adminServiceController.deletePartner);
 // Middleware to handle both JSON and multipart/form-data
@@ -378,5 +402,60 @@ router.delete(
   adminAuth,
   adminServiceController.deletePartnerServiceHub
 );
+
+// Popular Services Management
+router.get('/popular-services', adminAuth, adminPopularServiceController.getAllPopularServices);
+router.get('/popular-services/:id', adminAuth, adminPopularServiceController.getPopularService);
+router.post('/popular-services', adminAuth, adminPopularServiceController.createPopularService);
+router.put('/popular-services/:id', adminAuth, adminPopularServiceController.updatePopularService);
+router.delete('/popular-services/:id', adminAuth, adminPopularServiceController.deletePopularService);
+router.put('/popular-services/order/update', adminAuth, adminPopularServiceController.updateOrder);
+router.post('/popular-services/migrate', adminAuth, adminPopularServiceController.migrateExistingServices);
+
+// Subscription Plans Management (Admin)
+router.get('/subscription-plans', adminAuth, subscriptionPlanController.getAllPlansAdmin);
+router.get('/subscription-plans/:planId', adminAuth, subscriptionPlanController.getPlanById);
+router.post('/subscription-plans', adminAuth, subscriptionPlanController.createPlan);
+router.put('/subscription-plans/:planId', adminAuth, subscriptionPlanController.updatePlan);
+router.delete('/subscription-plans/:planId', adminAuth, subscriptionPlanController.deletePlan);
+
+// Featured Reviews Management (Admin)
+router.get('/featured-reviews', adminAuth, featuredReviewController.getAllReviewsAdmin);
+router.get('/featured-reviews/:reviewId', adminAuth, featuredReviewController.getReviewById);
+router.post('/featured-reviews', adminAuth, featuredReviewController.createReview);
+router.put('/featured-reviews/:reviewId', adminAuth, featuredReviewController.updateReview);
+router.delete('/featured-reviews/:reviewId', adminAuth, featuredReviewController.deleteReview);
+
+// Material Categories Management (Admin)
+router.get('/material-categories', adminAuth, materialCategoryController.getAllMaterialCategories);
+router.get('/material-categories/:id', adminAuth, materialCategoryController.getMaterialCategory);
+router.post('/material-categories', adminAuth, materialCategoryController.createMaterialCategory);
+router.put('/material-categories/:id', adminAuth, materialCategoryController.updateMaterialCategory);
+router.delete('/material-categories/:id', adminAuth, materialCategoryController.deleteMaterialCategory);
+router.put('/material-categories/order/update', adminAuth, materialCategoryController.updateMaterialCategoryOrder);
+
+// Inventory Management (Admin)
+// Inventory Items
+router.get('/inventory/items', adminAuth, inventoryController.getAllInventoryItems);
+router.get('/inventory/items/stats', adminAuth, inventoryController.getInventoryStats);
+router.get('/inventory/items/:id', adminAuth, inventoryController.getInventoryItem);
+router.get('/inventory/items/:id/history', adminAuth, inventoryController.getInventoryItemHistory);
+router.post('/inventory/items', adminAuth, inventoryController.createInventoryItem);
+router.put('/inventory/items/:id', adminAuth, inventoryController.updateInventoryItem);
+router.delete('/inventory/items/:id', adminAuth, inventoryController.deleteInventoryItem);
+
+// Purchase Orders
+router.get('/inventory/purchase-orders', adminAuth, inventoryController.getAllPurchaseOrders);
+router.get('/inventory/purchase-orders/:id', adminAuth, inventoryController.getPurchaseOrder);
+router.post('/inventory/purchase-orders', adminAuth, inventoryController.createPurchaseOrder);
+router.put('/inventory/purchase-orders/:id', adminAuth, inventoryController.updatePurchaseOrder);
+router.delete('/inventory/purchase-orders/:id', adminAuth, inventoryController.deletePurchaseOrder);
+
+// Inventory Thresholds
+router.get('/inventory/thresholds', adminAuth, inventoryController.getAllThresholds);
+router.get('/inventory/thresholds/:category', adminAuth, inventoryController.getThreshold);
+router.post('/inventory/thresholds', adminAuth, inventoryController.upsertThreshold);
+router.put('/inventory/thresholds/:category', adminAuth, inventoryController.upsertThreshold);
+router.delete('/inventory/thresholds/:category', adminAuth, inventoryController.deleteThreshold);
 
 module.exports = router;

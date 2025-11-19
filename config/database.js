@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 
+// Fix Mongoose deprecation warning
+mongoose.set('strictQuery', false);
+
 const connectDB = async () => {
   try {
     // Check if MONGODB_URI is set

@@ -1,6 +1,9 @@
 const MGPlan = require('../models/MGPlan');
 const Partner = require('../models/PartnerModel');
 const PartnerWallet = require('../models/PartnerWallet');
+const { PaymentTransaction } = require('../models/RegisterFee');
+const phonePayModel = require('../models/phonePay');
+const mongoose = require('mongoose');
 
 // Get all MG Plans
 exports.getAllPlans = async (req, res) => {
@@ -248,7 +251,7 @@ exports.deletePlan = async (req, res) => {
 // Partner: Select/Subscribe to MG Plan
 exports.subscribeToPlan = async (req, res) => {
   try {
-    const { planId } = req.body;
+    const { planId, payId } = req.body;
     const partnerId = req.partner._id;
     
     if (!planId) {
@@ -266,13 +269,19 @@ exports.subscribeToPlan = async (req, res) => {
       });
     }
     
-    const partner = await Partner.findById(partnerId);
+    // Fetch partner with category populated to check for lead creation
+    const partner = await Partner.findById(partnerId)
+      .populate('category', 'name')
+      .populate('service', 'name');
     if (!partner) {
       return res.status(404).json({
         success: false,
         message: 'Partner not found'
       });
     }
+    
+    // Get partner name from profile or use phone as fallback
+    const partnerName = partner.profile?.name || partner.name || partner.phone || 'Unknown Partner';
     
     const subscribedAt = new Date();
     const expiresAt = new Date(subscribedAt);
@@ -311,6 +320,185 @@ exports.subscribeToPlan = async (req, res) => {
     partner.markModified('mgPlanHistory');
 
     await partner.save();
+    
+    // Create lead when partner subscribes to plan from Lead Marketplace
+    // Check if partner registered from Lead Marketplace (check metadata or profile status)
+    try {
+      const Lead = require('../models/Lead');
+      
+      // Check if lead already exists for this partner's plan subscription
+      const existingLead = await Lead.findOne({ 
+        'metadata.partnerId': partnerId.toString(),
+        'metadata.planSubscriptionId': planId.toString(),
+        'metadata.createdBy': 'plan_subscription'
+      });
+      
+      // Create lead if partner has categories and city, and no existing lead
+      // This lead will appear in admin Lead Management page
+      // Check if partner has category (could be populated or just ObjectId)
+      const hasCategory = partner.category && (
+        (Array.isArray(partner.category) && partner.category.length > 0) ||
+        (!Array.isArray(partner.category) && partner.category)
+      );
+      const hasCity = partner.profile?.city && partner.profile.city.trim() !== '';
+      
+      console.log('🔍 Lead creation check:');
+      console.log('  - Has category:', hasCategory);
+      console.log('  - Category value:', partner.category);
+      console.log('  - Has city:', hasCity);
+      console.log('  - City value:', partner.profile?.city);
+      console.log('  - Existing lead:', !!existingLead);
+      
+      if (!existingLead && hasCategory && hasCity) {
+        const leadCategory = Array.isArray(partner.category) ? partner.category[0] : partner.category;
+        
+        // Ensure leadCategory is an ObjectId
+        const categoryId = leadCategory._id || leadCategory;
+        
+        const lead = new Lead({
+          user: null, // No user for plan subscription leads
+          booking: null, // No booking for plan subscription leads
+          category: categoryId,
+          service: partner.service && partner.service.length > 0 ? (partner.service[0]._id || partner.service[0]) : null,
+          subService: null,
+          city: partner.profile.city,
+          location: {
+            address: partner.profile.address || '',
+            landmark: partner.profile.landmark || '',
+            pincode: partner.profile.pincode || '',
+            coordinates: {
+              lat: 0,
+              lng: 0
+            }
+          },
+          value: plan.price || 0, // Use plan price as lead value
+          allocationStrategy: 'rule_based',
+          priority: 'high', // Higher priority for plan subscribers
+          status: 'awaiting_bid',
+          expiryTime: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+          metadata: {
+            description: `Partner subscribed to ${plan.name} plan from Lead Marketplace - ${partner.profile?.name || 'Partner'}`,
+            createdBy: 'plan_subscription',
+            partnerId: partnerId.toString(),
+            partnerName: partner.profile?.name,
+            partnerPhone: partner.phone,
+            partnerEmail: partner.profile?.email,
+            planSubscriptionId: planId.toString(),
+            planName: plan.name,
+            planPrice: plan.price,
+            fromLeadMarketplace: true // Flag to identify leads from Lead Marketplace
+          }
+        });
+        
+        await lead.save();
+        
+        // Populate the lead to get category name for logging
+        await lead.populate('category', 'name');
+        
+        console.log('✅ Lead created for plan subscription:');
+        console.log('  - Lead ID:', lead.leadId);
+        console.log('  - Partner:', partner.profile?.name || partner.phone);
+        console.log('  - Plan:', plan.name);
+        console.log('  - Category:', lead.category?.name || 'N/A');
+        console.log('  - City:', lead.city);
+        console.log('  - Value: ₹', lead.value);
+        console.log('  - Status:', lead.status);
+        console.log('  - This lead will appear in Admin Lead Management page');
+      } else if (existingLead) {
+        console.log('⚠️ Lead already exists for this plan subscription, skipping creation');
+        console.log('  - Existing Lead ID:', existingLead.leadId);
+      } else {
+        console.log('⚠️ Cannot create lead: Missing category or city');
+        console.log('  - Has category:', hasCategory);
+        console.log('  - Category value:', partner.category);
+        console.log('  - Has city:', hasCity);
+        console.log('  - City value:', partner.profile?.city);
+        console.log('  - Existing lead:', !!existingLead);
+      }
+    } catch (leadErr) {
+      console.error('❌ Error creating lead for plan subscription:', leadErr);
+      console.error('  - Error details:', leadErr.message);
+      // Don't block plan subscription if lead creation fails
+    }
+    
+    // Verify and get PhonePe transaction details if payId is provided
+    let phonePeTransaction = null;
+    let phonePeTransactionId = null;
+    let paymentStatus = 'success'; // Default to success
+    
+    if (payId) {
+      try {
+        // Check if payId is a valid ObjectId or string
+        const isValidObjectId = mongoose.Types.ObjectId.isValid(payId);
+        if (isValidObjectId) {
+          phonePeTransaction = await phonePayModel.findById(payId);
+        } else {
+          // Try to find by transactionid field
+          phonePeTransaction = await phonePayModel.findOne({ transactionid: payId });
+        }
+        
+        if (phonePeTransaction) {
+          phonePeTransactionId = phonePeTransaction.transactionid || phonePeTransaction._id.toString();
+          // Map PhonePe status to our status
+          if (phonePeTransaction.status === 'COMPLETED') {
+            paymentStatus = 'success';
+          } else if (phonePeTransaction.status === 'FAILED') {
+            paymentStatus = 'failed';
+          } else {
+            paymentStatus = 'pending';
+          }
+        } else {
+          // If transaction not found, use payId as phonepeTransactionId
+          phonePeTransactionId = payId;
+        }
+      } catch (phonePeError) {
+        console.error('Error fetching PhonePe transaction:', phonePeError);
+        // Continue with payId as phonepeTransactionId
+        phonePeTransactionId = payId;
+      }
+    }
+    
+    // Record MG Plan fee transaction
+    try {
+      const timestamp = Date.now();
+      const uniqueId = phonePeTransactionId || payId || partnerId.toString();
+      
+      // Build transaction object - only include phonepeTransactionId if it has a value
+      const transactionData = {
+        partnerId: partnerId.toString(),
+        amount: plan.price,
+        status: paymentStatus,
+        paymentMethod: 'whatsapp',
+        transactionId: `MG-${uniqueId}-${timestamp}`,
+        feeType: 'mg_plan',
+        description: `MG Plan Subscription - ${plan.name} - Partner: ${partnerName}`,
+        metadata: {
+          planId: planId.toString(),
+          planName: plan.name,
+          leadsGuaranteed: plan.leads,
+          commissionRate: plan.commission,
+          leadFee: plan.leadFee,
+          validityMonths: plan.validityMonths || 1,
+          subscribedAt: subscribedAt,
+          expiresAt: expiresAt,
+          partnerName: partnerName,
+          partnerPhone: partner.phone || null,
+          partnerEmail: partner.profile?.email || null,
+          phonePeMerchantTransactionId: payId || null,
+          phonePeStatus: phonePeTransaction?.status || null
+        }
+      };
+      
+      // Only add phonepeTransactionId if it has a value (to avoid duplicate null key error)
+      if (phonePeTransactionId || payId) {
+        transactionData.phonepeTransactionId = phonePeTransactionId || payId;
+      }
+      
+      await PaymentTransaction.create(transactionData);
+    } catch (txnError) {
+      console.error('Error recording MG plan transaction:', txnError);
+      // Don't fail the subscription if transaction recording fails
+    }
     
     res.json({
       success: true,

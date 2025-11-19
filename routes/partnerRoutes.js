@@ -150,6 +150,7 @@ router.get('/referralcode/:referralCode',auth,partnerAuthController.getReferralC
 
 // Partner Service Hub Routes (Protected)
 const adminServiceController = require("../controllers/adminServiceController");
+const hubController = require("../controllers/hubController");
 router.get("/service-hubs/available", auth, adminServiceController.getAllAvailableServiceHubs);
 router.post("/service-hubs", auth, async (req, res) => {
   try {
@@ -160,6 +161,40 @@ router.post("/service-hubs", auth, async (req, res) => {
   } catch (error) {
     console.error('Partner Service Hub Creation Error:', error);
     res.status(500).json({ success: false, message: 'Failed to create service hub', error: error.message });
+  }
+});
+
+// Partner Hub Assignment Routes (New Hub System)
+router.post("/hubs/assign", auth, async (req, res) => {
+  try {
+    const { hubId } = req.body;
+    if (!hubId) {
+      return res.status(400).json({ success: false, message: 'Hub ID is required' });
+    }
+    const partnerId = req.partner._id.toString();
+    console.log(`Assigning hub ${hubId} to partner ${partnerId}`);
+    req.params.hubId = hubId;
+    req.body.partnerId = partnerId;
+    return hubController.assignHubToPartner(req, res);
+  } catch (error) {
+    console.error('Partner Hub Assignment Error:', error);
+    res.status(500).json({ success: false, message: 'Failed to assign hub', error: error.message });
+  }
+});
+
+router.post("/hubs/unassign", auth, async (req, res) => {
+  try {
+    const { hubId } = req.body;
+    if (!hubId) {
+      return res.status(400).json({ success: false, message: 'Hub ID is required' });
+    }
+    const partnerId = req.partner._id.toString();
+    req.params.hubId = hubId;
+    req.body.partnerId = partnerId;
+    return hubController.unassignHubFromPartner(req, res);
+  } catch (error) {
+    console.error('Partner Hub Unassignment Error:', error);
+    res.status(500).json({ success: false, message: 'Failed to unassign hub', error: error.message });
   }
 });
 
@@ -248,7 +283,7 @@ router.post(
 );
 
 // Route to top up wallet
-router.post("/partner/wallet/topup", auth, partnerWalletController.topUpWallet);
+router.post("/wallet/topup", auth, partnerWalletController.topUpWallet);
 // Route to get wallet transactions
 router.get(
   "/partner/:partnerId/transactions",
@@ -312,5 +347,33 @@ router.get("/mg-plans", auth, mgPlanController.getAllPlans);
 router.get("/mg-plans/current", auth, mgPlanController.getPartnerPlan);
 router.post("/mg-plans/subscribe", auth, mgPlanController.subscribeToPlan);
 router.post("/mg-plans/renew", auth, mgPlanController.renewPlan);
+
+// Public Partner Verification Route (No Auth Required)
+router.get("/verify/:partnerId", partnerAuthController.verifyPartner);
+
+// Team Member Routes
+const teamMemberController = require("../controllers/teamMemberController");
+router.get("/team-members", auth, teamMemberController.getTeamMembers);
+router.post("/team-members", auth, upload.fields([
+  { name: 'profilePicture', maxCount: 1 },
+  { name: 'panCard', maxCount: 1 },
+  { name: 'aadhaar', maxCount: 1 },
+  { name: 'aadhaarback', maxCount: 1 },
+  { name: 'chequeImage', maxCount: 1 },
+  { name: 'drivingLicence', maxCount: 1 },
+  { name: 'bill', maxCount: 1 }
+]), teamMemberController.addTeamMember);
+router.put("/team-members/:memberId", upload.fields([
+  { name: 'profilePicture', maxCount: 1 },
+  { name: 'panCard', maxCount: 1 },
+  { name: 'aadhaar', maxCount: 1 },
+  { name: 'aadhaarback', maxCount: 1 },
+  { name: 'chequeImage', maxCount: 1 },
+  { name: 'drivingLicence', maxCount: 1 },
+  { name: 'bill', maxCount: 1 }
+]), auth, teamMemberController.updateTeamMember);
+router.delete("/team-members/:memberId", auth, teamMemberController.deleteTeamMember);
+router.get("/team-members/:memberId/activities", auth, teamMemberController.getTeamMemberActivities);
+router.post("/team-members/assign-booking", auth, teamMemberController.assignBookingToTeamMember);
 
 module.exports = router;

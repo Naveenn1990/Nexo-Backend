@@ -64,6 +64,10 @@ const bookingSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Partner", // Assigned when the partner accepts the booking
     },
+    teamMember: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "TeamMember", // Team member who completed the booking
+    },
 
     acceptedAt: Date,
     completedAt: Date,

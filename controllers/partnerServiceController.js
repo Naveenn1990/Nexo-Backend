@@ -1237,7 +1237,7 @@ exports.completeBooking = async (req, res) => {
     const { id } = req.params;
     console.log("check", req.body);
     const files = req.files;
-    const { payamout, paymentMode } = req.body;
+    const { payamout, paymentMode, teamMember } = req.body;
 
 
     // Process file uploads
@@ -1262,6 +1262,7 @@ exports.completeBooking = async (req, res) => {
         photos,
         videos,
         completedAt: new Date(),
+        ...(teamMember && { teamMember }), // Add teamMember if provided
       },
       { new: true }
     )
@@ -1298,9 +1299,11 @@ exports.completeBooking = async (req, res) => {
       partnerWallet.transactions.push({
         amount: payamout,
         type: "debit",
-        description: `Payment for booking ${booking.subService.name} completed`,
+        description: `Payment for booking ${booking.subService.name} completed${teamMember ? ` by team member` : ''}`,
         reference: booking._id,
         balance: partnerWallet.balance,
+        booking: booking._id,
+        ...(teamMember && { teamMember }), // Add teamMember if provided
       })
       await partnerWallet.save();
     }
@@ -1351,6 +1354,7 @@ exports.getCompletedBookings = async (req, res) => {
       .populate("user", "name email phone") // Populate user details
       .populate("service", "name") // Populate service details
       .populate("subService", "name") // Populate subService details
+      .populate("teamMember", "name phone role") // Populate team member details
       .select("-__v") // Exclude version key
       .sort({ updatedAt: -1 }); // Sort by completion date, newest first
 
@@ -1852,10 +1856,18 @@ exports.resumeBooking = async (req, res) => {
 exports.getPartnerBookings = async (req, res) => {
   try {
     const { partnerId } = req.params;
+    const TeamMember = require("../models/TeamMember");
 
+    // Get all team member IDs for this partner
+    const teamMembers = await TeamMember.find({ partner: partnerId, status: "active" }).select("_id");
+    const teamMemberIds = teamMembers.map(tm => tm._id);
+
+    // Fetch bookings where partner = partnerId OR teamMember is in teamMemberIds
     const bookings = await Booking.find({
-      partner: partnerId,
-      status: "accepted",
+      $or: [
+        { partner: partnerId, status: "accepted" },
+        { teamMember: { $in: teamMemberIds }, status: "accepted" }
+      ]
     })
       .populate({
         path: "user",
@@ -1873,6 +1885,10 @@ exports.getPartnerBookings = async (req, res) => {
         path: "partner",
         select:
           "name email phone profilePicture address experience qualification profile",
+      })
+      .populate({
+        path: "teamMember",
+        select: "name phone role",
       })
       .sort({ updatedAt: -1 });
 
@@ -2064,7 +2080,7 @@ exports.AddManulProductCart = async (req, res) => {
   }
 }
 
-// Get all bookings
+// Get all bookings (including team member bookings)
 exports.allpartnerBookings = async (req, res) => {
   try {
     if (!req.partner || !req.partner.id) {
@@ -2072,29 +2088,29 @@ exports.allpartnerBookings = async (req, res) => {
     }
 
     const partnerId = req.partner.id;
+    const TeamMember = require("../models/TeamMember");
 
-    // Fetch partner and populate bookings
-    const partner = await Partner.findById(partnerId)
-      .populate({
-        path: "bookings",
-        select: "status service user createdAt updatedAt",
-        populate: [
-          {
-            path: "service",
-            select: "name subService",
-            populate: { path: "subService", select: "name description" },
-          },
-          { path: "user", select: "name email phone profilePicture" },
-        ],
-      })
+    // Get all team member IDs for this partner
+    const teamMembers = await TeamMember.find({ partner: partnerId, status: "active" }).select("_id");
+    const teamMemberIds = teamMembers.map(tm => tm._id);
+
+    // Fetch bookings where partner = partnerId OR teamMember is in teamMemberIds
+    const allBookings = await Booking.find({
+      $or: [
+        { partner: partnerId },
+        { teamMember: { $in: teamMemberIds } }
+      ]
+    })
+      .populate({ path: "service", select: "name description" })
+      .populate({ path: "subService", select: "name description price" })
+      .populate({ path: "category", select: "name" })
+      .populate({ path: "user", select: "name email phone profilePicture" })
+      .populate({ path: "teamMember", select: "name phone role" })
+      .populate({ path: "partner", select: "profile.name phone" })
       .sort({ updatedAt: -1 })
-      .lean(); // Convert to plain JS object for optimization
+      .lean();
 
-    if (!partner) {
-      return res.status(404).json({ message: "Partner not found" });
-    }
-
-    if (!partner.bookings || partner.bookings.length === 0) {
+    if (!allBookings || allBookings.length === 0) {
       return res.status(200).json({
         message: "No bookings found for this partner",
         bookings: {},
@@ -2104,9 +2120,6 @@ exports.allpartnerBookings = async (req, res) => {
         },
       });
     }
-
-    // Debugging logs
-    // console.log("Total Bookings for Partner:", partner.bookings.length);
 
     // Define booking status categories
     const statuses = [
@@ -2121,28 +2134,24 @@ exports.allpartnerBookings = async (req, res) => {
     );
 
     // Categorize bookings by status
-    partner.bookings.forEach((booking) => {
+    allBookings.forEach((booking) => {
       const status = booking.status || "pending"; // Default to "pending" if missing
-      // console.log(`Booking ID: ${booking._id}, Status: ${status}`);
 
       if (statuses.includes(status)) {
         bookingsByStatus[status].push(booking);
       }
     });
 
-    // Direct DB query to verify completed bookings
+    // Direct DB query to verify completed bookings (including team members)
     const completedBookingsCount = await Booking.countDocuments({
-      partner: partnerId,
-      status: "completed",
+      $or: [
+        { partner: partnerId, status: "completed" },
+        { teamMember: { $in: teamMemberIds }, status: "completed" }
+      ]
     });
 
-    // console.log(
-    //   "Verified Completed Bookings Count from DB:",
-    //   completedBookingsCount
-    // );
-
     // Total bookings count
-    const totalBookings = partner.bookings.length;
+    const totalBookings = allBookings.length;
     const completedCount = bookingsByStatus.completed.length;
     const pendingCount = totalBookings - completedCount; // Everything except "completed" is pending
 
@@ -2399,7 +2408,7 @@ exports.sendOtpWithNotification = async (req, res) => {
     }
     const otp = Math.floor(100000 + Math.random() * 900000).toString(); // Generate a 6-digit OTP
     if (!user.fcmToken) {
-      await sendOTP(user.phone, otp);
+      // await sendOTP(user.phone, otp);
       booking.otp = otp; // Save OTP to booking
       await booking.save();
       return res.status(200).json({ message: "OTP sent successfully" });
@@ -2473,7 +2482,7 @@ exports.sendOtpWithNotification = async (req, res) => {
         console.log(`No FCM token for user: ${user._id}`);
       }
     } catch (error) {
-      sendOTP(user.phone, otp);
+      // sendOTP(user.phone, otp);
     }
 
 
@@ -2530,7 +2539,7 @@ exports.sendSmsOtp = async (req, res) => {
     }
     const otp = Math.floor(100000 + Math.random() * 900000).toString(); // Generate a 6-digit OTP
 
-    await sendOTP(user.phone, otp);
+    // await sendOTP(user.phone, otp);
     booking.otp = otp; // Save OTP to booking
     await booking.save();
     return res.status(200).json({ message: "OTP sent successfully" });

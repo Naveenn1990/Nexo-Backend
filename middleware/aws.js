@@ -1,10 +1,4 @@
-const {
-  S3Client,
-  PutObjectCommand,
-  DeleteObjectCommand,
-  ListObjectsV2Command,
-  GetObjectCommand,
-} = require("@aws-sdk/client-s3");
+const AWS = require("aws-sdk");
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
@@ -12,14 +6,14 @@ const { pipeline } = require("stream");
 const { promisify } = require("util");
 dotenv.config();
 
-const s3Client = new S3Client({
+// Configure AWS SDK v2
+AWS.config.update({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   region: process.env.AWS_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-
 });
+
+const s3Client = new AWS.S3();
 
 
 const DOWNLOAD_DIR = path.join(__dirname, "downloads");
@@ -34,8 +28,7 @@ const downloadAllImages = async (bucketName = process.env.AWS_S3_BUCKET_NAME) =>
       Bucket: bucketName,
     };
 
-    const listCommand = new ListObjectsV2Command(listParams);
-    const listData = await s3Client.send(listCommand);
+    const listData = await s3Client.listObjectsV2(listParams).promise();
 
     if (!listData.Contents || listData.Contents.length === 0) {
       console.log("No files found in bucket.");
@@ -60,10 +53,9 @@ const downloadAllImages = async (bucketName = process.env.AWS_S3_BUCKET_NAME) =>
         Key: file.Key,
       };
 
-      const getObjectCommand = new GetObjectCommand(getObjectParams);
-      const data = await s3Client.send(getObjectCommand);
+      const data = s3Client.getObject(getObjectParams).createReadStream();
 
-      await streamPipeline(data.Body, fs.createWriteStream(localPath));
+      await streamPipeline(data, fs.createWriteStream(localPath));
       console.log(`Downloaded: ${file.Key}`);
     }
 
@@ -84,8 +76,7 @@ const uploadFile = (file, bucketname) => {
       Body: fs.createReadStream(file.filepath),
       ContentType: file.mimetype,
     };
-    const command = new PutObjectCommand(params);
-    s3Client.send(command, (err, data) => {
+    s3Client.putObject(params, (err, data) => {
       if (err) {
         reject("File not uploaded");
       } else {
@@ -108,8 +99,7 @@ const uploadFile2 = (file, bucketname) => {
       Body: file.buffer,
       ContentType: file.mimetype,
     };
-    const command = new PutObjectCommand(params);
-    s3Client.send(command, (err, data) => {
+    s3Client.putObject(params, (err, data) => {
       if (err) {
         reject("File not uploaded");
       } else {
@@ -139,13 +129,11 @@ const deleteFile = async (url) => {
  console.log(fileKey);
   const params = {
     Bucket: process.env.AWS_S3_BUCKET_NAME,
-    Delete: {
-      Objects: [{ Key: fileKey }],
-    },
+    Key: fileKey,
   };
 
   try {
-    const data = await s3Client.destroy(params);
+    const data = await s3Client.deleteObject(params).promise();
     return data;
   } catch (err) {
     throw new Error(`Error deleting file: ${err.message}`);
@@ -153,7 +141,7 @@ const deleteFile = async (url) => {
 };
 
 const updateFile = async (fileKey, newFile) => {
-  await deleteFile(fileKey); // Delete the old file first
+  await deleteFile(`https://${process.env.AWS_S3_BUCKET_NAME}.s3.amazonaws.com/${fileKey}`); // Delete the old file first
 
   const params = {
     ACL: "public-read",
@@ -163,9 +151,8 @@ const updateFile = async (fileKey, newFile) => {
   };
 
   try {
-    const command = new PutObjectCommand(params);
-    const data = await s3Client.send(command);
-    return data.Location;
+    const data = await s3Client.putObject(params).promise();
+    return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.amazonaws.com/${fileKey}`;
   } catch (err) {
     throw new Error(`Error updating file: ${err.message}`);
   }
@@ -181,7 +168,7 @@ const multifileUpload = async (files, bucketname) => {
       };
 
       return new Promise((resolve, reject) => {
-        s3Client.send(new PutObjectCommand(params), (err, data) => {
+        s3Client.putObject(params, (err, data) => {
           if (err) {
             reject(err);
           } else {

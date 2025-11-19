@@ -15,6 +15,7 @@ const mongoose = require("mongoose");
 const { uploadFile2 } = require("../middleware/aws");
 const Notification = require("../models/Notification");
 const dayjs = require("dayjs");
+const { PaymentTransaction } = require("../models/RegisterFee");
 
 
 
@@ -730,7 +731,44 @@ exports.verifyPartnerKYC = async (req, res) => {
 // Get all partners
 exports.getAllPartners = async (req, res) => {
   try {
-    const partners = await Partner.find()
+    // Extract query parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || '';
+    const status = req.query.status || ''; // Optional: filter by status (active, pending, suspended, etc.)
+
+    // Build search query
+    const query = {};
+    
+    if (search) {
+      query.$or = [
+        { 'profile.name': { $regex: search, $options: 'i' } },
+        { 'profile.email': { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { referralCode: { $regex: search, $options: 'i' } },
+        { 'profile.city': { $regex: search, $options: 'i' } },
+        { 'profile.pincode': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Filter by status if provided
+    if (status) {
+      if (status === 'approved' || status === 'active') {
+        query['kyc.status'] = 'approved';
+      } else if (status === 'pending') {
+        query['kyc.status'] = { $in: ['pending', null] };
+      } else if (status === 'rejected') {
+        query['kyc.status'] = 'rejected';
+      } else if (status === 'suspended') {
+        query.status = 'suspended';
+      }
+    }
+
+    // Get total count for pagination
+    const total = await Partner.countDocuments(query);
+
+    // Fetch partners with pagination
+    const partners = await Partner.find(query)
       .populate("bookings")
       .populate("category")
       .populate("subcategory")
@@ -740,7 +778,9 @@ exports.getAllPartners = async (req, res) => {
       .populate("reviews.user", "name email")
       .populate("reviews.booking")
       .select("-tempOTP")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .skip((page - 1) * limit);
 
     // Process each partner
     const formattedPartners = await Promise.all(
@@ -845,7 +885,13 @@ exports.getAllPartners = async (req, res) => {
       })
     );
 
-    res.json({ partners: formattedPartners, total: partners.length });
+    res.json({ 
+      partners: formattedPartners, 
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
     console.error("Get Partners Error:", error);
     res.status(500).json({ message: "Error fetching partners" });
@@ -905,6 +951,10 @@ exports.getPartnerDetails = async (req, res) => {
         path: "mgPlan",
         select: "name price leads commission leadFee minWalletBalance refundPolicy validityType validityMonths",
       })
+      .populate({
+        path: "hubs",
+        select: "name areas city state description status",
+      })
       .select("-__v");
 
     if (!partner) {
@@ -948,6 +998,24 @@ exports.getPartnerDetails = async (req, res) => {
     } else if (partnerData.partnerTerms) {
       partnerData.terms = partnerData.partnerTerms;
     }
+    
+    // Ensure categoryNames is included and properly formatted
+    if (!partnerData.categoryNames || partnerData.categoryNames.length === 0) {
+      // Extract category names from populated category objects
+      if (partnerData.category && partnerData.category.length > 0) {
+        partnerData.categoryNames = partnerData.category
+          .map(cat => cat?.name || cat?.description)
+          .filter(Boolean);
+      }
+    }
+    
+    // Log for debugging
+    console.log('Partner Details Response:', {
+      partnerId: partnerData._id,
+      categoryCount: partnerData.category?.length || 0,
+      categoryNamesCount: partnerData.categoryNames?.length || 0,
+      categoryNames: partnerData.categoryNames
+    });
     
     res.json({ partner: partnerData, totalEarnings, transactions });
   } catch (error) {
@@ -1505,28 +1573,78 @@ exports.completeBooking = async (req, res) => {
     });
   }
 };
+// Get all team members (for admin)
+exports.getAllTeamMembers = async (req, res) => {
+  try {
+    const TeamMember = require("../models/TeamMember");
+    const { status = 'active' } = req.query;
+    
+    const query = {};
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    const teamMembers = await TeamMember.find(query)
+      .populate({
+        path: "partner",
+        select: 'phone profile'
+      })
+      .populate("categories", "name")
+      .populate("hubs", "name city state")
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: teamMembers,
+      count: teamMembers.length
+    });
+  } catch (error) {
+    console.error("Get All Team Members Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching team members",
+      error: error.message
+    });
+  }
+};
+
 //Assigned Booking
 
 exports.assignedbooking = async (req, res) => {
   try {
-    const { partnerId, bookingId } = req.body;
+    const { partnerId, bookingId, teamMemberId } = req.body;
     const book = await booking.findById(bookingId).populate("subService");
     // console.log("partnerId ,bookingId", partnerId, bookingId)
     if (!book) {
       return res.status(404).json({ message: "Booking not found" });
     }
 
+    // If team member is provided, assign to team member (which also sets partner)
+    if (teamMemberId) {
+      const TeamMember = require("../models/TeamMember");
+      const teamMember = await TeamMember.findById(teamMemberId).populate('partner');
+      if (!teamMember) {
+        return res.status(404).json({ message: "Team member not found" });
+      }
+      book.teamMember = teamMemberId;
+      book.partner = teamMember.partner._id || teamMember.partner;
+    } else if (partnerId) {
+      // Assign directly to partner
+      book.partner = partnerId;
+      book.teamMember = null; // Clear team member if assigning to partner directly
+    } else {
+      return res.status(400).json({ message: "Either partnerId or teamMemberId is required" });
+    }
 
     const notification = new Notification({
       title: 'Booking Assigned',
-      userId: partnerId,
+      userId: partnerId || (teamMember?.partner?._id || teamMember?.partner),
       message: `You have been assigned a new booking ${book.subService?.name} by wave admin`,
       createdAt: new Date(),
       read: false,
     });
     await notification.save();
 
-    book.partner = partnerId;
     book.status = "accepted"
     await book.save();
 
@@ -1733,6 +1851,203 @@ exports.updateUserStatus = async (req, res) => {
     return res.status(200).json({ message: 'User status updated', user });
   } catch (error) {
     return res.status(500).json({ message: 'Server error', error });
+  }
+};
+
+// Get all fee transactions (Admin)
+exports.getAllFeeTransactions = async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 50, 
+      feeType, 
+      status, 
+      startDate, 
+      endDate,
+      partnerId 
+    } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build query
+    const query = {};
+
+    // Filter by feeType - ensure exact match and valid value
+    if (feeType && feeType !== 'all' && feeType.trim() !== '') {
+      const trimmedFeeType = feeType.trim();
+      const validFeeTypes = ['registration', 'security_deposit', 'toolkit', 'mg_plan', 'lead_fee', 'other'];
+      if (validFeeTypes.includes(trimmedFeeType)) {
+        // Special logic for toolkit and security_deposit: check both feeType and priceBreakdown
+        if (trimmedFeeType === 'toolkit' || trimmedFeeType === 'security_deposit') {
+          // Use $or to check both feeType field and priceBreakdown in metadata
+          query.$or = [
+            { feeType: trimmedFeeType },
+            { [`metadata.priceBreakdown.${trimmedFeeType === 'security_deposit' ? 'securityDeposit' : 'toolkitPrice'}`]: { $exists: true, $gt: 0 } }
+          ];
+          // Debug logging
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Applying feeType filter with priceBreakdown check:', trimmedFeeType);
+          }
+        } else {
+          // For other fee types, use standard feeType filter
+          query.feeType = trimmedFeeType;
+          // Debug logging
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Applying feeType filter:', trimmedFeeType);
+          }
+        }
+      } else {
+        // Debug logging for invalid feeType
+        if (process.env.NODE_ENV === 'development') {
+          console.log('Invalid feeType received:', trimmedFeeType, 'Valid types:', validFeeTypes);
+        }
+      }
+    }
+
+    // Filter by status - ensure exact match and valid value
+    if (status && status !== 'all' && status.trim() !== '') {
+      const validStatuses = ['pending', 'success', 'failed', 'refunded'];
+      if (validStatuses.includes(status.trim())) {
+        query.status = status.trim();
+      }
+    }
+
+    // Filter by partnerId
+    if (partnerId && partnerId.trim() !== '') {
+      query.partnerId = partnerId.trim();
+    }
+
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) {
+        // Set to start of the day (00:00:00) in local timezone
+        const start = new Date(startDate + 'T00:00:00');
+        query.createdAt.$gte = start;
+      }
+      if (endDate) {
+        // Set to end of the day (23:59:59.999) in local timezone
+        const end = new Date(endDate + 'T23:59:59.999');
+        query.createdAt.$lte = end;
+      }
+    }
+    
+    // Debug logging (can be removed in production)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Fee Transactions Query:', JSON.stringify(query, null, 2));
+    }
+
+    // Get total count
+    const total = await PaymentTransaction.countDocuments(query);
+
+    // Get transactions with partner details
+    // Use find with explicit query to ensure filters are applied correctly
+    const transactions = await PaymentTransaction.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    // Debug: Log the actual results
+    if (process.env.NODE_ENV === 'development' && (query.feeType || query.$or)) {
+      const filterType = query.feeType || (query.$or ? 'priceBreakdown check' : 'unknown');
+      console.log(`Found ${transactions.length} transactions with filter: ${filterType}`);
+      if (transactions.length > 0) {
+        console.log('Sample transaction feeTypes:', transactions.slice(0, 3).map(t => t.feeType));
+        if (query.$or) {
+          console.log('Sample priceBreakdowns:', transactions.slice(0, 3).map(t => ({
+            feeType: t.feeType,
+            hasSecurityDeposit: t.metadata?.priceBreakdown?.securityDeposit > 0,
+            hasToolkit: t.metadata?.priceBreakdown?.toolkitPrice > 0
+          })));
+        }
+      } else {
+        console.log('No transactions found with filter:', filterType);
+      }
+    }
+
+    // Populate partner information
+    const transactionsWithPartner = await Promise.all(
+      transactions.map(async (txn) => {
+        try {
+          const partner = await Partner.findById(txn.partnerId).select('phone profile.name profile.email').lean();
+          const partnerName = partner?.profile?.name || partner?.name || 'Unknown';
+          const partnerPhone = partner?.phone || txn.partnerId;
+          const partnerEmail = partner?.profile?.email || partner?.email || '';
+          
+          return {
+            ...txn,
+            partner: {
+              name: partnerName,
+              phone: partnerPhone,
+              email: partnerEmail
+            }
+          };
+        } catch (err) {
+          // Try to get name from metadata if available
+          const partnerName = txn.metadata?.partnerName || 'Unknown';
+          return {
+            ...txn,
+            partner: {
+              name: partnerName,
+              phone: txn.partnerId,
+              email: txn.metadata?.partnerEmail || ''
+            }
+          };
+        }
+      })
+    );
+
+    // Calculate summary statistics
+    const summary = await PaymentTransaction.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$amount' },
+          totalCount: { $sum: 1 },
+          successCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] }
+          },
+          successAmount: {
+            $sum: { $cond: [{ $eq: ['$status', 'success'] }, '$amount', 0] }
+          }
+        }
+      }
+    ]);
+
+    const stats = summary[0] || {
+      totalAmount: 0,
+      totalCount: 0,
+      successCount: 0,
+      successAmount: 0
+    };
+
+    res.json({
+      success: true,
+      data: transactionsWithPartner,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      },
+      stats: {
+        totalAmount: stats.totalAmount,
+        totalCount: stats.totalCount,
+        successCount: stats.successCount,
+        successAmount: stats.successAmount,
+        failedCount: stats.totalCount - stats.successCount
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching fee transactions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching fee transactions',
+      error: error.message
+    });
   }
 };
 

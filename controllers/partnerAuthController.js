@@ -11,6 +11,8 @@ const mongoose = require("mongoose");
 const NotificationModel = require("../models/Notification");
 const { uploadFile2 } = require("../middleware/aws");
 const ReferralAmount = require("../models/ReferralAmount");
+const { PaymentTransaction } = require("../models/RegisterFee");
+const phonePayModel = require("../models/phonePay");
 // Send OTP for partner login/registration
 exports.sendLoginOTP = async (req, res) => {
   try {
@@ -49,7 +51,7 @@ exports.sendLoginOTP = async (req, res) => {
     );
 
     // Send OTP via SMS
-    await sendOTP(phone, otp);
+    // await sendOTP(phone, otp);
 
     // Debug log
     // console.log("Generated OTP:", { phone, otp, expiry: otpExpiry });
@@ -88,11 +90,222 @@ exports.updateTokenFmc = async (req, res) => {
 
 exports.completePaymentVendor = async (req, res) => {
   try {
-    let { id, registerAmount, payId, paidBy, terms } = req.body;
+    let { id, registerAmount, payId, paidBy, terms, securityDeposit, toolkitPrice } = req.body;
     let data = await Partner.findById(id || req.partner._id);
     if (!data) return res.status(200).json({ error: "Data not found" });
-    if (registerAmount) {
-      data.profile.registerAmount = registerAmount;
+    
+    // Fetch current fees from PricingSettings to validate and use dynamic fees
+    const { PricingSettings } = require('../models/RegisterFee');
+    let pricingSettings = await PricingSettings.findOne();
+    
+    // If no pricing settings exist, create default
+    if (!pricingSettings) {
+      pricingSettings = new PricingSettings({
+        registrationFee: 500,
+        securityDeposit: 1000,
+        toolkitPrice: 2499,
+        originalPrice: 3000,
+        specialOfferActive: false,
+        commissionRate: 15,
+        freeCommissionThreshold: 1000,
+        refundPolicy: "Registration fees are non-refundable once payment is processed",
+        registrationFeeRefundable: false,
+        securityDepositRefundable: false,
+        toolkitPriceRefundable: false
+      });
+      await pricingSettings.save();
+    }
+    
+    // Use dynamic fees from settings if not provided or validate against current fees
+    const currentRegistrationFee = pricingSettings.registrationFee || 500;
+    const currentSecurityDeposit = pricingSettings.securityDeposit || 1000;
+    const currentToolkitPrice = pricingSettings.toolkitPrice || 2499;
+    
+    // Use provided amounts or fall back to current settings
+    const finalRegistrationFee = registerAmount || currentRegistrationFee;
+    const finalSecurityDeposit = securityDeposit !== undefined ? securityDeposit : currentSecurityDeposit;
+    const finalToolkitPrice = toolkitPrice !== undefined ? toolkitPrice : (toolkitPrice === 0 ? 0 : currentToolkitPrice);
+    
+    // Validate amounts match current settings (allow small tolerance for rounding)
+    if (Math.abs(finalRegistrationFee - currentRegistrationFee) > 1) {
+      console.warn(`Registration fee mismatch: provided ${finalRegistrationFee}, expected ${currentRegistrationFee}`);
+    }
+    if (securityDeposit !== undefined && Math.abs(finalSecurityDeposit - currentSecurityDeposit) > 1) {
+      console.warn(`Security deposit mismatch: provided ${finalSecurityDeposit}, expected ${currentSecurityDeposit}`);
+    }
+    if (toolkitPrice !== undefined && toolkitPrice > 0 && Math.abs(finalToolkitPrice - currentToolkitPrice) > 1) {
+      console.warn(`Toolkit price mismatch: provided ${finalToolkitPrice}, expected ${currentToolkitPrice}`);
+    }
+    
+    const partnerId = data._id.toString();
+    const totalAmount = finalRegistrationFee + finalSecurityDeposit + finalToolkitPrice;
+    
+    // Get partner name from profile or use phone as fallback
+    const partnerName = data.profile?.name || data.name || data.phone || 'Unknown Partner';
+    
+    // Create a payment group ID to link related transactions
+    const paymentGroupId = `PAY-${partnerId}-${Date.now()}`;
+    
+    // Verify and get PhonePe transaction details if payId is provided
+    let phonePeTransaction = null;
+    let phonePeTransactionId = null;
+    let paymentStatus = 'success'; // Default to success
+    
+    if (payId) {
+      try {
+        // Check if payId is a valid ObjectId or string
+        const isValidObjectId = mongoose.Types.ObjectId.isValid(payId);
+        if (isValidObjectId) {
+          phonePeTransaction = await phonePayModel.findById(payId);
+        } else {
+          // Try to find by transactionid field
+          phonePeTransaction = await phonePayModel.findOne({ transactionid: payId });
+        }
+        
+        if (phonePeTransaction) {
+          phonePeTransactionId = phonePeTransaction.transactionid || phonePeTransaction._id.toString();
+          // Map PhonePe status to our status
+          if (phonePeTransaction.status === 'COMPLETED') {
+            paymentStatus = 'success';
+          } else if (phonePeTransaction.status === 'FAILED') {
+            paymentStatus = 'failed';
+          } else {
+            paymentStatus = 'pending';
+          }
+        } else {
+          // If transaction not found, use payId as phonepeTransactionId
+          phonePeTransactionId = payId;
+        }
+      } catch (phonePeError) {
+        console.error('Error fetching PhonePe transaction:', phonePeError);
+        // Continue with payId as phonepeTransactionId
+        phonePeTransactionId = payId;
+      }
+    }
+    
+    // Generate unique transaction IDs for each fee type
+    const timestamp = Date.now();
+    const uniqueId = phonePeTransactionId || payId || partnerId;
+    
+    // Record registration fee transaction (separate transaction)
+    if (finalRegistrationFee && finalRegistrationFee > 0) {
+      try {
+        await PaymentTransaction.create({
+          partnerId: partnerId,
+          amount: finalRegistrationFee,
+          status: paymentStatus,
+          paymentMethod: 'whatsapp',
+          transactionId: `REG-${uniqueId}-${timestamp}-1`,
+          phonepeTransactionId: phonePeTransactionId || payId || null,
+          feeType: 'registration',
+          description: `Registration Fee - ₹${finalRegistrationFee.toLocaleString('en-IN')} - Partner: ${partnerName}`,
+          metadata: {
+            paidBy: paidBy || 'Self',
+            partnerName: partnerName,
+            partnerPhone: data.phone || null,
+            partnerEmail: data.profile?.email || null,
+            phonePeMerchantTransactionId: payId || null,
+            phonePeStatus: phonePeTransaction?.status || null,
+            paymentGroupId: paymentGroupId,
+            totalPaymentAmount: totalAmount,
+            priceBreakdown: {
+              registrationFee: finalRegistrationFee,
+              securityDeposit: finalSecurityDeposit,
+              toolkitPrice: finalToolkitPrice,
+              totalAmount: totalAmount
+            },
+            currentFees: {
+              registrationFee: currentRegistrationFee,
+              securityDeposit: currentSecurityDeposit,
+              toolkitPrice: currentToolkitPrice
+            }
+          }
+        });
+      } catch (txnError) {
+        console.error('Error recording registration fee transaction:', txnError);
+      }
+    }
+    
+    // Record security deposit transaction (separate transaction)
+    if (finalSecurityDeposit && finalSecurityDeposit > 0) {
+      try {
+        await PaymentTransaction.create({
+          partnerId: partnerId,
+          amount: finalSecurityDeposit,
+          status: paymentStatus,
+          paymentMethod: 'whatsapp',
+          transactionId: `SEC-${uniqueId}-${timestamp}-2`,
+          phonepeTransactionId: phonePeTransactionId || payId || null,
+          feeType: 'security_deposit',
+          description: `Security Deposit - ₹${finalSecurityDeposit.toLocaleString('en-IN')} - Partner: ${partnerName}`,
+          metadata: {
+            paidBy: paidBy || 'Self',
+            partnerName: partnerName,
+            partnerPhone: data.phone || null,
+            partnerEmail: data.profile?.email || null,
+            phonePeMerchantTransactionId: payId || null,
+            phonePeStatus: phonePeTransaction?.status || null,
+            paymentGroupId: paymentGroupId,
+            totalPaymentAmount: totalAmount,
+            priceBreakdown: {
+              registrationFee: finalRegistrationFee,
+              securityDeposit: finalSecurityDeposit,
+              toolkitPrice: finalToolkitPrice,
+              totalAmount: totalAmount
+            },
+            currentFees: {
+              registrationFee: currentRegistrationFee,
+              securityDeposit: currentSecurityDeposit,
+              toolkitPrice: currentToolkitPrice
+            }
+          }
+        });
+      } catch (txnError) {
+        console.error('Error recording security deposit transaction:', txnError);
+      }
+    }
+    
+    // Record toolkit transaction (separate transaction)
+    if (finalToolkitPrice && finalToolkitPrice > 0) {
+      try {
+        await PaymentTransaction.create({
+          partnerId: partnerId,
+          amount: finalToolkitPrice,
+          status: paymentStatus,
+          paymentMethod: 'whatsapp',
+          transactionId: `TOOL-${uniqueId}-${timestamp}-3`,
+          phonepeTransactionId: phonePeTransactionId || payId || null,
+          feeType: 'toolkit',
+          description: `Toolkit Purchase - ₹${finalToolkitPrice.toLocaleString('en-IN')} - Partner: ${partnerName}`,
+          metadata: {
+            paidBy: paidBy || 'Self',
+            partnerName: partnerName,
+            partnerPhone: data.phone || null,
+            partnerEmail: data.profile?.email || null,
+            phonePeMerchantTransactionId: payId || null,
+            phonePeStatus: phonePeTransaction?.status || null,
+            paymentGroupId: paymentGroupId,
+            totalPaymentAmount: totalAmount,
+            priceBreakdown: {
+              registrationFee: finalRegistrationFee,
+              securityDeposit: finalSecurityDeposit,
+              toolkitPrice: finalToolkitPrice,
+              totalAmount: totalAmount
+            },
+            currentFees: {
+              registrationFee: currentRegistrationFee,
+              securityDeposit: currentSecurityDeposit,
+              toolkitPrice: currentToolkitPrice
+            }
+          }
+        });
+      } catch (txnError) {
+        console.error('Error recording toolkit transaction:', txnError);
+      }
+    }
+    
+    if (finalRegistrationFee) {
+      data.profile.registerAmount = finalRegistrationFee;
       data.profile.registerdFee = true;
     }
     if (payId) {
@@ -109,8 +322,34 @@ exports.completePaymentVendor = async (req, res) => {
         acceptedAt: terms.acceptedAt || new Date()
       };
     }
+    
+    // Update profile status when payment is completed
+    // If payment is done, ensure profile is marked appropriately
+    if (data.profile.registerdFee) {
+      // Check if basic required fields are present
+      const hasBasicFields = data.profile?.name && 
+                            data.profile?.email && 
+                            data.qualification && 
+                            data.experience;
+      
+      // If basic fields are present, mark profile as complete
+      if (hasBasicFields) {
+        data.profileCompleted = true;
+      }
+      
+      // Set profileStatus to active when payment is completed
+      // Admin can review and change status later if needed
+      data.profileStatus = 'active';
+    }
+    
     data = await data.save();
-    return res.status(200).json({ success: "Successfully completed transaction" })
+    return res.status(200).json({ 
+      success: true,
+      message: "Successfully completed transaction",
+      partnerId: data._id.toString(),
+      profileCompleted: data.profileCompleted,
+      profileStatus: data.profileStatus
+    })
   } catch (error) {
     console.log(error)
     return res.status(500).json({ error: error.message })
@@ -252,7 +491,7 @@ exports.resendOTP = async (req, res) => {
     );
 
     // Send OTP via SMS
-    await sendOTP(phone, otp);
+    // await sendOTP(phone, otp);
 
     res.json({
       success: true,
@@ -450,6 +689,7 @@ exports.selectCategoryAndServices = async (req, res) => {
     const obj = {
       modeOfService,
       profileCompleted: true, // Mark profile as complete
+      profileStatus: 'active', // Set profile status to active when categories are selected
       drive,
       tempoTraveller
     }
@@ -527,6 +767,15 @@ exports.selectCategoryAndServices = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Partner not found" });
+    }
+    
+    // Ensure profileStatus is active when profile is completed
+    // This happens when categories are selected (which means onboarding is progressing)
+    if (updatedPartner.profileCompleted) {
+      if (updatedPartner.profileStatus !== 'active') {
+        updatedPartner.profileStatus = 'active';
+        await updatedPartner.save();
+      }
     }
 
     return res.status(200).json({
@@ -907,6 +1156,7 @@ exports.getProfile = async (req, res) => {
       .populate("category", "name description")
       .populate("service", "name description basePrice duration")
       .populate("subcategory")
+      .populate("hubs", "name city state areas description")
 
     // console.log("Fetched Profile:", profile);
 
@@ -962,7 +1212,9 @@ exports.getProfile = async (req, res) => {
           accountHolderName: profile.bankDetails.accountHolderName || null,
           bankName: profile.bankDetails.bankName || null,
           chequeImage: profile.bankDetails.chequeImage || null
-        } : null
+        } : null,
+        // Include assigned hubs
+        hubs: profile.hubs || []
       },
     });
   } catch (error) {
@@ -999,11 +1251,27 @@ exports.updateProfile = async (req, res) => {
       experience,
       category,
       service,
+      subcategory,
       modeOfService,
       city,
-
+      address,
+      landmark,
+      pincode,
+      referralCode,
+      gstNumber,
+      categories,
+      categoryNames,
+      terms,
     } = req.body;
-    // console.log("req.body : ", req.body);
+    
+    // Log the entire request body for debugging
+    console.log('📥 Update Profile Request Body:', {
+      hasCategories: !!req.body.categories,
+      hasCategoryNames: !!req.body.categoryNames,
+      categories: req.body.categories,
+      categoryNames: req.body.categoryNames,
+      allKeys: Object.keys(req.body)
+    });
 
     let profile = await Partner.findOne({ _id: req.partner._id });
     if (!profile) {
@@ -1026,18 +1294,245 @@ exports.updateProfile = async (req, res) => {
     if (qualification) profile.qualification = qualification;
     if (experience) profile.experience = (experience);
     if (category) profile.category = category;
-    if (service) profile.service = service;
+    if (subcategory) {
+      // Handle both array and single value
+      if (Array.isArray(subcategory)) {
+        profile.subcategory = subcategory;
+      } else {
+        profile.subcategory = [subcategory];
+      }
+    }
+    if (service) {
+      // Handle both array and single value
+      if (Array.isArray(service)) {
+        profile.service = service;
+      } else {
+        profile.service = [service];
+      }
+    }
     if (modeOfService) profile.modeOfService = modeOfService;
     if (profilePicture) profile.profilePicture = profilePicture;
 
-    // Apply updates to the profile
-
+    // Update address fields
+    if (address) profile.profile.address = address;
+    if (landmark) profile.profile.landmark = landmark;
+    if (pincode) profile.profile.pincode = pincode;
+    if (gstNumber) profile.profile.gstNumber = gstNumber;
+    if (referralCode) profile.referralCode = referralCode;
+    
+    // Update categories (can be array)
+    console.log('📦 Update Profile - Categories Data:', {
+      hasCategories: !!categories,
+      categoriesType: Array.isArray(categories) ? 'array' : typeof categories,
+      categoriesValue: categories,
+      categoriesLength: Array.isArray(categories) ? categories.length : (categories ? 1 : 0),
+      hasCategoryNames: !!categoryNames,
+      categoryNamesType: Array.isArray(categoryNames) ? 'array' : typeof categoryNames,
+      categoryNamesValue: categoryNames,
+      categoryNamesLength: Array.isArray(categoryNames) ? categoryNames.length : (categoryNames ? 1 : 0)
+    });
+    
+    if (categories) {
+      if (Array.isArray(categories)) {
+        profile.category = categories;
+        console.log('✅ Saved categories array:', categories);
+      } else {
+        profile.category = [categories];
+        console.log('✅ Saved single category as array:', [categories]);
+      }
+    } else {
+      console.log('⚠️ No categories provided in request');
+    }
+    
+    // Always ensure categoryNames are stored
+    if (categoryNames && Array.isArray(categoryNames) && categoryNames.length > 0) {
+      // Store category names directly
+      profile.categoryNames = categoryNames;
+      console.log('✅ Saved categoryNames directly:', categoryNames);
+    } else if (categories && (Array.isArray(categories) ? categories.length > 0 : true)) {
+      // If categoryNames not provided but categories are, fetch names from database
+      const ServiceCategory = require('../models/ServiceCategory');
+      try {
+        const categoryIds = Array.isArray(categories) ? categories : [categories];
+        console.log('🔍 Fetching category names for IDs:', categoryIds);
+        
+        const categoryDocs = await ServiceCategory.find({ 
+          _id: { $in: categoryIds } 
+        }).select('name');
+        
+        console.log('📋 Found category documents:', categoryDocs);
+        
+        if (categoryDocs.length > 0) {
+          profile.categoryNames = categoryDocs.map(cat => cat.name).filter(Boolean);
+          console.log('✅ Saved categoryNames from database:', profile.categoryNames);
+        } else {
+          // If lookup fails, try to extract from populated objects
+          const namesFromObjects = categoryIds
+            .map(cat => (typeof cat === 'object' && cat.name ? cat.name : null))
+            .filter(Boolean);
+          if (namesFromObjects.length > 0) {
+            profile.categoryNames = namesFromObjects;
+            console.log('✅ Saved categoryNames from objects:', profile.categoryNames);
+          } else {
+            console.log('⚠️ Could not find category names for IDs:', categoryIds);
+          }
+        }
+      } catch (err) {
+        console.error('❌ Error fetching category names:', err);
+        // If lookup fails, try to extract from populated objects
+        const categoryIds = Array.isArray(categories) ? categories : [categories];
+        const namesFromObjects = categoryIds
+          .map(cat => (typeof cat === 'object' && cat.name ? cat.name : null))
+          .filter(Boolean);
+        if (namesFromObjects.length > 0) {
+          profile.categoryNames = namesFromObjects;
+          console.log('✅ Saved categoryNames from objects (fallback):', profile.categoryNames);
+        }
+      }
+    } else {
+      console.log('⚠️ No categories or categoryNames to process');
+    }
+    
+    // Handle terms acceptance (for Lead Marketplace flow - registration without payment)
+    if (terms && terms.accepted) {
+      profile.termsAccepted = true;
+      profile.termsSignature = terms.signature || null;
+      profile.termsAcceptedAt = terms.acceptedAt ? new Date(terms.acceptedAt) : new Date();
+      // Set profile as completed and active (without payment requirement for Lead Marketplace flow)
+      profile.profileCompleted = true;
+      profile.profileStatus = 'active';
+    }
+    
+    // Log before saving
+    console.log('💾 Saving partner profile:', {
+      partnerId: profile._id,
+      categoryCount: profile.category?.length || 0,
+      categoryNamesCount: profile.categoryNames?.length || 0,
+      categories: profile.category,
+      categoryNames: profile.categoryNames
+    });
+    
+    // Apply updates to the profile - SAVE FIRST before creating lead
     profile = await profile.save();
-    // console.log("prrrrrrrrr==>", profile);
+    
+    // Log after saving
+    console.log('✅ Partner profile saved:', {
+      partnerId: profile._id,
+      categoryCount: profile.category?.length || 0,
+      categoryNamesCount: profile.categoryNames?.length || 0,
+      categories: profile.category,
+      categoryNames: profile.categoryNames
+    });
 
-    // Populate category and service details
+    // Populate category and service details before lead creation check
     await profile.populate("category", "name description");
     await profile.populate("service", "name description basePrice duration");
+    
+    // Create a lead entry in Lead Management for partners registered from Lead Marketplace
+    // AFTER profile is saved and populated
+    if (terms && terms.accepted) {
+      try {
+        const Lead = require('../models/Lead');
+        const ServiceCategory = require('../models/ServiceCategory');
+        
+        // Check if lead already exists for this partner registration
+        const existingLead = await Lead.findOne({ 
+          'metadata.partnerRegistrationId': profile._id.toString(),
+          'metadata.createdBy': 'partner_registration'
+        });
+        
+        // Check if partner has category and city (required for lead creation)
+        // Now profile is saved and populated, so we can check properly
+        // Handle both populated (object) and unpopulated (ObjectId) category
+        let categoryValue = profile.category;
+        if (Array.isArray(categoryValue)) {
+          categoryValue = categoryValue.length > 0 ? categoryValue[0] : null;
+        }
+        // If populated, get the _id, otherwise use the value directly
+        const categoryId = categoryValue?._id || categoryValue;
+        
+        const hasCategory = !!categoryId;
+        const hasCity = profile.profile?.city && profile.profile.city.trim() !== '';
+        
+        console.log('🔍 Partner Registration Lead Creation Check (AFTER SAVE):');
+        console.log('  - Partner ID:', profile._id.toString());
+        console.log('  - Profile name:', profile.profile?.name);
+        console.log('  - Profile city:', profile.profile?.city);
+        console.log('  - Category value (raw):', profile.category);
+        console.log('  - Category value (processed):', categoryValue);
+        console.log('  - Category ID:', categoryId);
+        console.log('  - Has category:', hasCategory);
+        console.log('  - Has city:', hasCity);
+        console.log('  - Existing lead:', !!existingLead);
+        
+        if (!existingLead && hasCategory && hasCity) {
+          // categoryId is already processed above
+          
+          // Generate leadId as fallback
+          const generateLeadId = () => {
+            const timestamp = Date.now();
+            const randomNum = Math.floor(Math.random() * 10000);
+            return `LD-${timestamp}-${randomNum}`;
+          };
+          
+          // Create lead (leadId will be auto-generated by the model)
+          const lead = new Lead({
+            leadId: generateLeadId(), // Set initial leadId
+            user: null, // No user for partner registration leads
+            booking: null, // No booking for partner registration leads
+            category: categoryId,
+            service: profile.service && profile.service.length > 0 ? (profile.service[0]._id || profile.service[0]) : null,
+            subService: null,
+            city: profile.profile.city,
+            location: {
+              address: profile.profile.address || '',
+              landmark: profile.profile.landmark || '',
+              pincode: profile.profile.pincode || '',
+              coordinates: {
+                lat: 0,
+                lng: 0
+              }
+            },
+            value: 0, // Default value for partner registration leads
+            allocationStrategy: 'rule_based',
+            priority: 'high', // Higher priority for Lead Marketplace registrations
+            status: 'awaiting_bid',
+            expiryTime: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+            metadata: {
+              description: `Partner registration from Lead Marketplace - ${profile.profile.name || 'New Partner'}`,
+              createdBy: 'partner_registration',
+              partnerRegistrationId: profile._id.toString(),
+              partnerName: profile.profile.name,
+              partnerPhone: profile.phone,
+              partnerEmail: profile.profile.email,
+              fromLeadMarketplace: true // Flag to identify Lead Marketplace registrations
+            }
+          });
+          
+          await lead.save();
+          console.log('✅ Lead created for partner registration from Lead Marketplace:');
+          console.log('  - Lead ID:', lead.leadId);
+          console.log('  - Partner:', profile.profile.name || profile.phone);
+          console.log('  - Category:', categoryId);
+          console.log('  - City:', profile.profile.city);
+          console.log('  - This lead will appear in Admin Lead Management page');
+        } else if (existingLead) {
+          console.log('⚠️ Lead already exists for this partner registration, skipping creation');
+          console.log('  - Existing Lead ID:', existingLead.leadId);
+        } else {
+          console.log('⚠️ Cannot create lead: Missing category or city');
+          console.log('  - Has category:', hasCategory);
+          console.log('  - Category value:', profile.category);
+          console.log('  - Has city:', hasCity);
+          console.log('  - City value:', profile.profile?.city);
+        }
+      } catch (leadErr) {
+        console.error('❌ Error creating lead for partner registration:', leadErr);
+        console.error('  - Error details:', leadErr.message);
+        // Don't block profile update if lead creation fails
+      }
+    }
+    // Note: Profile is already populated above before lead creation
 
     res.json({
       success: true,
@@ -1214,13 +1709,125 @@ exports.addtransactionwallet = async (req, res) => {
 
 exports.getAllwalletTransaction = async (req, res) => {
   try {
-    let data = await PartnerWallet.find().populate("partner").sort({ _id: -1 });
-    return res.status(200).json({
-      message: "Successfully fetched all transactions",
-      success: data,
-    });
+    // Check if this is a partner request (filtered) or admin request (all)
+    const partnerId = req.partner?._id || req.partner?.id;
+    const limit = parseInt(req.query.limit) || 50;
+    
+    let wallets = [];
+    
+    if (partnerId) {
+      // Partner request: Get partner's wallet and team member activities
+      const TeamMember = require("../models/TeamMember");
+      const teamMembers = await TeamMember.find({ partner: partnerId, status: "active" }).select("_id name phone");
+      const teamMemberIds = teamMembers.map(tm => tm._id);
+      const teamMemberMap = {};
+      teamMembers.forEach(tm => {
+        teamMemberMap[tm._id.toString()] = { name: tm.name, phone: tm.phone };
+      });
+      
+      // Get partner's wallet
+      const partnerWallet = await PartnerWallet.findOne({ partner: partnerId })
+        .populate("partner", "profile phone");
+      
+      if (partnerWallet) {
+        wallets.push(partnerWallet);
+      }
+      
+      // Flatten transactions with team member info
+      const allTransactions = [];
+      
+      for (const wallet of wallets) {
+        if (wallet.transactions && wallet.transactions.length > 0) {
+          const partnerName = wallet.partner?.profile?.name || wallet.partner?.Profile?.name || 'N/A';
+          
+          wallet.transactions.forEach((txn) => {
+            // Check if transaction description mentions a team member
+            let teamMemberInfo = null;
+            if (txn.teamMember) {
+              const tmId = txn.teamMember.toString();
+              if (teamMemberMap[tmId]) {
+                teamMemberInfo = teamMemberMap[tmId];
+              }
+            }
+            
+            allTransactions.push({
+              id: txn._id || txn.transactionId,
+              transactionId: txn.transactionId || txn._id?.toString() || 'N/A',
+              partnerName: partnerName,
+              partnerId: wallet.partner?._id || wallet.partner?.id,
+              teamMember: teamMemberInfo,
+              type: txn.type || 'N/A',
+              amount: txn.amount || 0,
+              balance: txn.balance || wallet.balance || 0,
+              description: txn.description || '',
+              reference: txn.reference || '',
+              initiatedBy: txn.initiatedBy || 'System',
+              createdAt: txn.createdAt || txn.timestamp || new Date()
+            });
+          });
+        }
+      }
+      
+      // Sort by date (newest first) and limit
+      allTransactions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const limitedTransactions = allTransactions.slice(0, limit);
+      
+      return res.status(200).json({
+        message: "Successfully fetched partner transactions",
+        success: true,
+        transactions: limitedTransactions,
+        total: allTransactions.length
+      });
+    } else {
+      // Admin request: Get all wallets
+      wallets = await PartnerWallet.find()
+        .populate("partner", "profile phone")
+        .sort({ _id: -1 });
+      
+      // Flatten all transactions with partner info
+      const allTransactions = [];
+      
+      for (const wallet of wallets) {
+        if (wallet.transactions && wallet.transactions.length > 0) {
+          const partnerName = wallet.partner?.profile?.name || wallet.partner?.Profile?.name || 'N/A';
+          const partnerEmail = wallet.partner?.profile?.email || wallet.partner?.Profile?.email || 'N/A';
+          
+          wallet.transactions.forEach((txn) => {
+            allTransactions.push({
+              id: txn._id || txn.transactionId,
+              transactionId: txn.transactionId || txn._id?.toString() || 'N/A',
+              partnerName: partnerName,
+              partnerId: wallet.partner?._id || wallet.partner?.id,
+              type: txn.type || 'N/A',
+              amount: txn.amount || 0,
+              balance: txn.balance || wallet.balance || 0,
+              description: txn.description || '',
+              reference: txn.reference || '',
+              initiatedBy: txn.initiatedBy || 'System',
+              createdAt: txn.createdAt || txn.timestamp || new Date()
+            });
+          });
+        }
+      }
+      
+      // Sort by date (newest first) and limit
+      allTransactions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const limitedTransactions = allTransactions.slice(0, limit);
+      
+      return res.status(200).json({
+        message: "Successfully fetched all transactions",
+        success: true,
+        transactions: limitedTransactions,
+        total: allTransactions.length
+      });
+    }
   } catch (error) {
-    console.log(error);
+    console.error("Get All Wallet Transactions Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching wallet transactions",
+      error: error.message
+    });
   }
 };
 
@@ -1359,6 +1966,57 @@ exports.getReferralCode = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error fetching referral code",
+    });
+  }
+}
+
+// Public Partner Verification (No Auth Required)
+exports.verifyPartner = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+
+    if (!partnerId) {
+      return res.status(400).json({
+        success: false,
+        message: "Partner ID is required",
+      });
+    }
+
+    const partner = await Partner.findById(partnerId)
+      .populate("category", "name")
+      .select("profile.name profile.email phone profile.city qualification experience categoryNames kyc.status profilePicture")
+      .lean();
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Partner not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      partner: {
+        id: partner._id,
+        partnerId: partner._id.toString(),
+        name: partner.profile?.name || "N/A",
+        email: partner.profile?.email || "N/A",
+        phone: partner.phone || "N/A",
+        city: partner.profile?.city || "N/A",
+        qualification: partner.qualification || "N/A",
+        experience: partner.experience || 0,
+        categoryNames: partner.categoryNames || [],
+        profilePicture: partner.profilePicture || null,
+        kycStatus: partner.kyc?.status || "pending",
+        verifiedAt: partner.kyc?.verifiedAt || null
+      },
+    });
+  } catch (error) {
+    console.error("Verify Partner Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error verifying partner",
+      error: error.message,
     });
   }
 }

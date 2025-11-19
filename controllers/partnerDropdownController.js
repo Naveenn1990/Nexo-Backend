@@ -9,14 +9,31 @@ exports.getAllCategories = async (req, res) => {
             .select('name description icon')
             .sort({ name: 1 });
 
-        // Get all services in one query to avoid N+1 problem
+        // Get all services with subCategory populated to access category
         const allServices = await Service.find({})
-            .select('name description basePrice duration icon category')
+            .select('name description icon subCategory')
+            .populate({
+                path: 'subCategory',
+                select: 'category name',
+                populate: {
+                    path: 'category',
+                    select: '_id name'
+                }
+            })
             .sort({ name: 1 });
 
         // Group services by category
         const servicesByCategory = allServices.reduce((acc, service) => {
-            const categoryId = service.category.toString();
+            // Get category from subCategory.category or skip if not available
+            let categoryId = null;
+            if (service.subCategory && service.subCategory.category) {
+                categoryId = service.subCategory.category._id?.toString() || service.subCategory.category.toString();
+            }
+            
+            if (!categoryId) {
+                return acc; // Skip services without category
+            }
+            
             if (!acc[categoryId]) {
                 acc[categoryId] = [];
             }
@@ -24,8 +41,6 @@ exports.getAllCategories = async (req, res) => {
                 id: service._id,
                 name: service.name,
                 description: service.description,
-                basePrice: service.basePrice,
-                duration: service.duration,
                 icon: service.icon
             });
             return acc;

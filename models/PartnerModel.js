@@ -201,7 +201,7 @@ const partnerSchema = new mongoose.Schema(
       type: String,
       unique: true,
       default: () => {
-        return `WAVEREP${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        return `NEXO${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
       },
     },
     totalEarnRe:{
@@ -306,6 +306,11 @@ const partnerSchema = new mongoose.Schema(
       ],
       default: []
     },
+    // Reference to Hub model for hub management
+    hubs: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Hub"
+    }],
     // Add Reviews Field
     reviews: [
       {

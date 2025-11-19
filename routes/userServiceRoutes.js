@@ -177,6 +177,29 @@ router.get("/popular", userServiceController.getPopularServices);
 
 /**
  * @swagger
+ * /api/user/service-by-slug/{slug}:
+ *   get:
+ *     summary: Get service by slug
+ *     tags: [User Services]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Slug of the service
+ *     responses:
+ *       200:
+ *         description: Service retrieved successfully
+ *       404:
+ *         description: Service not found
+ *       500:
+ *         description: Server error
+ */
+router.get("/service-by-slug/:slug", userServiceController.getServiceBySlug);
+
+/**
+ * @swagger
  * /api/user/subcategories:
  *   get:
  *     summary: Get all subcategories

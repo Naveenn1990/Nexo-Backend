@@ -19,6 +19,10 @@ const serviceCategorySchema = new mongoose.Schema({
         required: true
     },
     subcategories: [{ type: mongoose.Schema.Types.ObjectId, ref: 'SubCategory' }],
+    order: {
+        type: Number,
+        default: 0
+    },
     isActive: {
         type: Boolean,
         default: true

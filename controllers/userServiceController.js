@@ -277,24 +277,17 @@ async function searchServices(req, res) {
 // Get popular services
 async function getPopularServices(req, res) {
   try {
-    const { limit = 10 } = req.query;
-
-    // Get services sorted by booking count (you can implement your own popularity logic)
-    const services = await Service.find({ isActive: true })
-      .populate("category", "name")
-      .select("name description icon basePrice duration category")
-      .limit(parseInt(limit))
+    const PopularService = require("../models/PopularService");
+    
+    // Get popular services sorted by order and filtered by isActive
+    const services = await PopularService.find({ isActive: true })
+      .sort({ order: 1, createdAt: -1 })
+      .select("name slug icon order description price trusted")
       .lean();
-
-    // Add clean image name to service icons
-    const servicesWithUrls = services.map((service) => ({
-      ...service,
-      icon: getCleanImageName(service.icon),
-    }));
 
     return res.status(200).json({
       success: true,
-      data: servicesWithUrls,
+      data: services,
       message: "Popular services fetched successfully",
     });
   } catch (error) {
@@ -302,6 +295,136 @@ async function getPopularServices(req, res) {
     return res.status(500).json({
       success: false,
       message: "Error fetching popular services",
+      error: error.message,
+    });
+  }
+}
+
+// Get service by slug
+async function getServiceBySlug(req, res) {
+  try {
+    const PopularService = require("../models/PopularService");
+    const Review = require("../models/Review");
+    const SubService = require("../models/SubService");
+    const Service = require("../models/Service");
+    const { slug } = req.params;
+    
+    const service = await PopularService.findOne({ slug, isActive: true }).lean();
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found",
+      });
+    }
+
+    // Try to find the actual Service model by name to get subservices
+    let actualService = null;
+    let subServices = [];
+    
+    try {
+      // Find Service by name (case insensitive)
+      actualService = await Service.findOne({
+        name: { $regex: new RegExp(`^${service.name}$`, 'i') },
+        isActive: true
+      }).lean();
+
+      if (actualService && actualService.subServices && actualService.subServices.length > 0) {
+        // Fetch full subservices data
+        subServices = await SubService.find({
+          _id: { $in: actualService.subServices },
+          isActive: true
+        })
+        .select('_id name description price basePrice discount gst icon includes excludes rating minimumAmount acceptCharges commission')
+        .lean();
+
+        // Format subservices with proper pricing and icon handling
+        subServices = subServices.map(sub => {
+          const finalPrice = sub.basePrice || (sub.price - (sub.price * (sub.discount || 0) / 100));
+          // Handle icon array - use first icon if array, otherwise use as is
+          const iconUrl = Array.isArray(sub.icon) && sub.icon.length > 0 
+            ? sub.icon[0] 
+            : (sub.icon || '');
+          return {
+            ...sub,
+            icon: iconUrl,
+            finalPrice: finalPrice,
+            originalPrice: sub.price,
+            discountAmount: sub.discount ? (sub.price * sub.discount / 100) : 0
+          };
+        });
+      } else {
+        // Fallback: Find subservices by name matching
+        subServices = await SubService.find({
+          name: { $regex: new RegExp(service.name, 'i') },
+          isActive: true
+        })
+        .select('_id name description price basePrice discount gst icon includes excludes rating minimumAmount acceptCharges commission')
+        .lean();
+
+        subServices = subServices.map(sub => {
+          const finalPrice = sub.basePrice || (sub.price - (sub.price * (sub.discount || 0) / 100));
+          // Handle icon array - use first icon if array, otherwise use as is
+          const iconUrl = Array.isArray(sub.icon) && sub.icon.length > 0 
+            ? sub.icon[0] 
+            : (sub.icon || '');
+          return {
+            ...sub,
+            icon: iconUrl,
+            finalPrice: finalPrice,
+            originalPrice: sub.price,
+            discountAmount: sub.discount ? (sub.price * sub.discount / 100) : 0
+          };
+        });
+      }
+    } catch (subServiceError) {
+      console.error("Error fetching subservices:", subServiceError);
+      subServices = [];
+    }
+
+    // Fetch reviews related to this service
+    try {
+      const subServiceIds = subServices.map(sub => sub._id);
+      
+      const reviews = await Review.find({
+        subService: { $in: subServiceIds },
+        status: 'approved'
+      })
+        .populate('user', 'name email')
+        .populate('subService', 'name')
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+
+      // Calculate average rating
+      const totalRatings = reviews.reduce((sum, review) => sum + review.rating, 0);
+      const averageRating = reviews.length > 0
+        ? (totalRatings / reviews.length).toFixed(1)
+        : null;
+
+      service.reviews = reviews;
+      service.averageRating = averageRating;
+      service.totalReviews = reviews.length;
+    } catch (reviewError) {
+      console.error("Error fetching reviews:", reviewError);
+      service.reviews = [];
+      service.averageRating = null;
+      service.totalReviews = 0;
+    }
+
+    // Add subservices to service data
+    service.subServices = subServices;
+
+    return res.status(200).json({
+      success: true,
+      data: service,
+      message: "Service fetched successfully",
+    });
+  } catch (error) {
+    console.error("Error in getServiceBySlug:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching service",
       error: error.message,
     });
   }
@@ -839,6 +962,7 @@ module.exports = {
   getServiceDetails,
   searchServices,
   getPopularServices,
+  getServiceBySlug,
   getServiceHierarchy,
   getAllServices,
   getAllServicesForUser,

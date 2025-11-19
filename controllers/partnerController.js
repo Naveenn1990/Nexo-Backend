@@ -35,7 +35,7 @@ const sendLoginOTP = async (req, res) => {
     // });
 
     // Send OTP (in development, we're just logging it)
-    await sendOTP(phone, otp);
+    // await sendOTP(phone, otp);
 
     res.status(200).json({
       message: "OTP sent successfully",

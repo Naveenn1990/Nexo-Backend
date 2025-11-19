@@ -12,6 +12,7 @@ require("dotenv").config();
 const bodyParser = require("body-parser");
 const socketIo = require("socket.io");
 const http = require("http");
+const axios = require("axios");
 const Booking = require("./models/booking");
 // const Notification = require("./models/Notification");
 
@@ -789,13 +790,23 @@ const phonePayRoutes = require('./routes/phonePay');
 const tokenRoutes=require('./routes/tokenRoute');
 const RegisterFee=require('./routes/registerFeeRoutes');
 const RefferralAmount= require('./routes/referralAmountRoutes');
+const hubRoutes = require('./routes/hubRoutes');
 // Initialize Firebase Admin
-// const serviceAccount = require('./firebase-admin.json');   
-// admin.initializeApp({
-//   credential: admin.credential.cert(serviceAccount),
-//   // databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`
-//   databaseURL: `https://wave-755af.firebaseio.com`
-// });
+try {
+  // Check if Firebase is already initialized
+  if (admin.apps.length === 0) {
+    const serviceAccount = require('./firebase-admin.json');   
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      databaseURL: `https://wave-755af.firebaseio.com`
+    });
+    console.log('Firebase Admin initialized successfully');
+  } else {
+    console.log('Firebase Admin already initialized');
+  }
+} catch (error) {
+  console.warn('Firebase Admin initialization skipped:', error.message);
+}
 
 
 // Routes
@@ -819,6 +830,7 @@ app.use('/api/phonepay', phonePayRoutes);
 app.use('/api/tokens', tokenRoutes);
 app.use('/api/admin', RegisterFee);
 app.use('/api/referral', RefferralAmount);
+app.use('/api/admin/hubs', hubRoutes);
 // Add this route to your backend
 app.post('/api/admin/proxy-image', async (req, res) => {
   try {

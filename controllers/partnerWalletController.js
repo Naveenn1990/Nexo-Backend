@@ -6,39 +6,60 @@ const { v4: uuidv4 } = require("uuid");
 
 exports.topUpWallet = async (req, res) => {
   try {
-    const { partnerId } = req.params;
-    const { amount, type, description, reference } = req.body; // Extract type from req.body
+    const partnerId = req.partner?._id || req.params?.partnerId;
+    const { amount, type, description, reference } = req.body;
 
-    console.log("req params", req.params);
-    console.log("req body", req.body);
-
-    if (!partnerId || !amount || !type || !reference) {
+    if (!partnerId || !amount || !type) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const lowerType = type.toLowerCase(); // Ensure lowercase values for enum
+    const lowerType = type.toLowerCase();
     if (!["credit", "debit"].includes(lowerType)) {
       return res.status(400).json({ message: "Invalid transaction type" });
     }
 
+    const PartnerWallet = require("../models/PartnerWallet");
     let wallet = await PartnerWallet.findOne({ partner: partnerId });
 
     if (!wallet) {
       wallet = new PartnerWallet({ partner: partnerId, balance: 0, transactions: [] });
     }
 
-    // Use schema methods for credit/debit
+    // Calculate new balance
+    const transactionAmount = parseFloat(amount);
+    let newBalance = wallet.balance;
+
     if (lowerType === "credit") {
-      await wallet.credit(amount, description, reference);
+      newBalance = wallet.balance + transactionAmount;
     } else if (lowerType === "debit") {
-      if (wallet.balance < amount) {
+      if (wallet.balance < transactionAmount) {
         return res.status(400).json({ message: "Insufficient balance" });
       }
-      await wallet.debit(amount, description, reference);
+      newBalance = wallet.balance - transactionAmount;
     }
 
-    res.status(201).json({ message: "Transaction successful", wallet });
+    // Create transaction
+    const transaction = {
+      type: lowerType,
+      amount: transactionAmount,
+      description: description || 'Topup',
+      reference: reference || `TOPUP-${Date.now()}`,
+      balance: newBalance
+    };
+
+    // Add transaction and update balance
+    wallet.transactions.push(transaction);
+    wallet.balance = newBalance;
+
+    await wallet.save();
+
+    res.status(201).json({ 
+      success: true,
+      message: "Transaction successful", 
+      wallet: await PartnerWallet.findOne({ partner: partnerId }).populate('partner', 'profile.name phone')
+    });
   } catch (error) {
+    console.error("Top-up wallet error:", error);
     res.status(500).json({ error: error.message });
   }
 };

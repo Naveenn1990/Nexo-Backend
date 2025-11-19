@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team Member API Tester</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 6px;
+            border-left: 4px solid #4F46E5;
+        }
+        .section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #4F46E5;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #4338CA;
+        }
+        button.secondary {
+            background: #6B7280;
+        }
+        button.secondary:hover {
+            background: #4B5563;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .result pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 12px;
+        }
+        .success {
+            color: #10B981;
+        }
+        .error {
+            color: #EF4444;
+        }
+        .info {
+            color: #3B82F6;
+        }
+        .token-display {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 12px;
+            word-break: break-all;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Team Member API Tester</h1>
+        <p class="subtitle">Test all team member APIs directly from your browser</p>
+
+        <!-- Token Display -->
+        <div class="section">
+            <h2>Authentication Token</h2>
+            <div class="token-display" id="tokenDisplay">Loading token from localStorage...</div>
+            <button onclick="loadToken()">Refresh Token</button>
+        </div>
+
+        <!-- Get Team Members -->
+        <div class="section">
+            <h2>1. Get Team Members</h2>
+            <button onclick="getTeamMembers()">Get All Team Members</button>
+            <div id="getMembersResult" class="result" style="display:none;"></div>
+        </div>
+
+        <!-- Get Available Hubs -->
+        <div class="section">
+            <h2>2. Get Available Hubs</h2>
+            <button onclick="getAvailableHubs()">Get Hubs</button>
+            <div id="getHubsResult" class="result" style="display:none;"></div>
+        </div>
+
+        <!-- Get Categories -->
+        <div class="section">
+            <h2>3. Get Categories</h2>
+            <button onclick="getCategories()">Get Categories</button>
+            <div id="getCategoriesResult" class="result" style="display:none;"></div>
+        </div>
+
+        <!-- Add Team Member -->
+        <div class="section">
+            <h2>4. Add Team Member</h2>
+            <div class="grid">
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" id="memberName" placeholder="John Doe" value="Test Technician">
+                </div>
+                <div class="form-group">
+                    <label>Phone *</label>
+                    <input type="text" id="memberPhone" placeholder="9876543210" value="9876543210">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="memberEmail" placeholder="john@example.com" value="test@example.com">
+                </div>
+                <div class="form-group">
+                    <label>City</label>
+                    <input type="text" id="memberCity" placeholder="Mumbai" value="Mumbai">
+                </div>
+                <div class="form-group">
+                    <label>Pincode</label>
+                    <input type="text" id="memberPincode" placeholder="400001" value="400001">
+                </div>
+                <div class="form-group">
+                    <label>Role</label>
+                    <select id="memberRole">
+                        <option value="technician">Technician</option>
+                        <option value="supervisor">Supervisor</option>
+                        <option value="manager">Manager</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Qualification</label>
+                    <input type="text" id="memberQualification" placeholder="B.Tech" value="B.Tech">
+                </div>
+                <div class="form-group">
+                    <label>Experience</label>
+                    <input type="text" id="memberExperience" placeholder="3 years" value="3 years">
+                </div>
+            </div>
+            <button onclick="addTeamMember()">Add Team Member</button>
+            <div id="addMemberResult" class="result" style="display:none;"></div>
+        </div>
+
+        <!-- Assign Booking -->
+        <div class="section">
+            <h2>5. Assign Booking to Team Member</h2>
+            <div class="grid">
+                <div class="form-group">
+                    <label>Booking ID</label>
+                    <input type="text" id="assignBookingId" placeholder="Booking ID">
+                </div>
+                <div class="form-group">
+                    <label>Team Member ID</label>
+                    <input type="text" id="assignMemberId" placeholder="Team Member ID">
+                </div>
+            </div>
+            <button onclick="assignBooking()">Assign Booking</button>
+            <button class="secondary" onclick="loadBookingsForAssign()">Load Bookings</button>
+            <div id="assignResult" class="result" style="display:none;"></div>
+        </div>
+
+        <!-- Get Activities -->
+        <div class="section">
+            <h2>6. Get Team Member Activities</h2>
+            <div class="form-group">
+                <label>Team Member ID</label>
+                <input type="text" id="activityMemberId" placeholder="Team Member ID">
+            </div>
+            <button onclick="getActivities()">Get Activities</button>
+            <div id="activitiesResult" class="result" style="display:none;"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/partner';
+        let token = '';
+
+        function loadToken() {
+            try {
+                const auth = localStorage.getItem('nexo_partner_auth');
+                if (auth) {
+                    const parsed = JSON.parse(auth);
+                    token = parsed.token || '';
+                    document.getElementById('tokenDisplay').textContent = token ? 
+                        `Token: ${token.substring(0, 30)}...` : 'No token found';
+                    document.getElementById('tokenDisplay').className = token ? 
+                        'token-display success' : 'token-display error';
+                } else {
+                    document.getElementById('tokenDisplay').textContent = 'No token found. Please login as partner.';
+                    document.getElementById('tokenDisplay').className = 'token-display error';
+                }
+            } catch (e) {
+                document.getElementById('tokenDisplay').textContent = 'Error loading token: ' + e.message;
+                document.getElementById('tokenDisplay').className = 'token-display error';
+            }
+        }
+
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            if (!token) {
+                alert('Please login first to get a token');
+                return null;
+            }
+
+            const options = {
+                method,
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            };
+
+            if (body) {
+                if (body instanceof FormData) {
+                    options.body = body;
+                } else {
+                    options.headers['Content-Type'] = 'application/json';
+                    options.body = JSON.stringify(body);
+                }
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                const data = await response.json();
+                return { success: response.ok, data, status: response.status };
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        }
+
+        function displayResult(elementId, result) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            if (result.success) {
+                element.innerHTML = `<pre class="success">${JSON.stringify(result.data, null, 2)}</pre>`;
+            } else {
+                element.innerHTML = `<pre class="error">${JSON.stringify(result.error || result.data, null, 2)}</pre>`;
+            }
+        }
+
+        async function getTeamMembers() {
+            const result = await apiCall('/team-members');
+            displayResult('getMembersResult', result);
+            if (result.success && result.data?.data?.[0]) {
+                document.getElementById('activityMemberId').value = result.data.data[0]._id;
+            }
+        }
+
+        async function getAvailableHubs() {
+            const result = await apiCall('/service-hubs/available');
+            displayResult('getHubsResult', result);
+        }
+
+        async function getCategories() {
+            const result = await apiCall('/dropdown/categories');
+            displayResult('getCategoriesResult', result);
+        }
+
+        async function addTeamMember() {
+            const formData = new FormData();
+            formData.append('name', document.getElementById('memberName').value);
+            formData.append('phone', document.getElementById('memberPhone').value);
+            formData.append('email', document.getElementById('memberEmail').value);
+            formData.append('city', document.getElementById('memberCity').value);
+            formData.append('pincode', document.getElementById('memberPincode').value);
+            formData.append('role', document.getElementById('memberRole').value);
+            formData.append('qualification', document.getElementById('memberQualification').value);
+            formData.append('experience', document.getElementById('memberExperience').value);
+
+            const result = await apiCall('/team-members', 'POST', formData);
+            displayResult('addMemberResult', result);
+            if (result.success && result.data?.data?._id) {
+                document.getElementById('assignMemberId').value = result.data.data._id;
+                document.getElementById('activityMemberId').value = result.data.data._id;
+            }
+        }
+
+        async function assignBooking() {
+            const bookingId = document.getElementById('assignBookingId').value;
+            const memberId = document.getElementById('assignMemberId').value;
+
+            if (!bookingId || !memberId) {
+                alert('Please provide both Booking ID and Team Member ID');
+                return;
+            }
+
+            const result = await apiCall('/team-members/assign-booking', 'POST', {
+                bookingId,
+                teamMemberId: memberId
+            });
+            displayResult('assignResult', result);
+        }
+
+        async function loadBookingsForAssign() {
+            const result = await apiCall('/bookings');
+            if (result.success) {
+                let bookings = [];
+                if (result.data?.bookings) {
+                    Object.values(result.data.bookings).forEach(statusBookings => {
+                        if (Array.isArray(statusBookings)) {
+                            bookings = bookings.concat(statusBookings);
+                        }
+                    });
+                } else if (Array.isArray(result.data)) {
+                    bookings = result.data;
+                } else if (Array.isArray(result.data?.data)) {
+                    bookings = result.data.data;
+                }
+
+                const acceptedBooking = bookings.find(b => 
+                    (b.status === 'accepted' || b.status === 'in_progress') && !b.teamMember
+                );
+
+                if (acceptedBooking) {
+                    document.getElementById('assignBookingId').value = acceptedBooking._id || acceptedBooking.bookingId;
+                    alert(`Found booking: ${acceptedBooking._id}\nService: ${acceptedBooking.service?.name || 'N/A'}`);
+                } else {
+                    alert('No accepted booking found without team member');
+                }
+            }
+            displayResult('assignResult', result);
+        }
+
+        async function getActivities() {
+            const memberId = document.getElementById('activityMemberId').value;
+            if (!memberId) {
+                alert('Please provide Team Member ID');
+                return;
+            }
+
+            const result = await apiCall(`/team-members/${memberId}/activities`);
+            displayResult('activitiesResult', result);
+        }
+
+        // Load token on page load
+        loadToken();
+    </script>
+</body>
+</html>
+

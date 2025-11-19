@@ -15,10 +15,18 @@ exports.auth = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const partner = await Partner.findById(decoded.id);
 
-    if (!partner || partner.status === 'blocked') {
+    if (!partner) {
       return res.status(401).json({ 
         success: false,
-        message: "Please authenticate" 
+        message: "Partner not found. Please authenticate again." 
+      });
+    }
+
+    // Check if partner is blocked (only if status field exists)
+    if (partner.status === 'blocked') {
+      return res.status(401).json({ 
+        success: false,
+        message: "Your account has been blocked. Please contact support." 
       });
     }
 

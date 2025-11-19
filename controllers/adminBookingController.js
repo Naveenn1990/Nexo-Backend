@@ -94,6 +94,14 @@ exports.getAllBookings = async (req, res) => {
                 select: 'profile.name profile.email profile.phone profilePicture'
             })
             .populate({
+                path: "teamMember", // Populate team member details
+                select: 'name phone role partner',
+                populate: {
+                    path: "partner",
+                    select: 'profile.name profile.email profile.phone'
+                }
+            })
+            .populate({
                 path: "cart.product", // Populate product details inside cart
             })
             .populate({

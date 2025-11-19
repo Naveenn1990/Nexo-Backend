@@ -158,7 +158,7 @@ const paymentTransactionSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['upi', 'card', 'netbanking', 'wallet'],
+    enum: ['upi', 'card', 'netbanking', 'wallet', 'whatsapp'],
     required: true
   },
   transactionId: {
@@ -170,6 +170,15 @@ const paymentTransactionSchema = new mongoose.Schema({
     type: String,
     unique: true,
     sparse: true
+  },
+  feeType: {
+    type: String,
+    enum: ['registration', 'security_deposit', 'toolkit', 'mg_plan', 'lead_fee', 'other'],
+    default: 'other'
+  },
+  description: {
+    type: String,
+    default: ''
   },
   metadata: {
     type: mongoose.Schema.Types.Mixed,

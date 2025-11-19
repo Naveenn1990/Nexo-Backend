@@ -98,7 +98,7 @@ exports.createService = async (req, res) => {
 // Get all service categories
 exports.getAllServiceCategories = async (req, res) => {
   try {
-    const categories = await ServiceCategory.find();
+    const categories = await ServiceCategory.find().sort({ order: 1, createdAt: -1 });
     res.status(200).json({
       success: true,
       data: categories
@@ -188,22 +188,28 @@ exports.addSubService = async (req, res) => {
       service: serviceId,
       name: name.trim(),
       description: description.trim(),
+      price: Number(basePrice), // Set price, basePrice will be calculated by pre-save hook
       basePrice: Number(basePrice),
-      duration: Number(duration),
-      icon: image,
-      status: 'active'
+      icon: image ? [image] : [], // Icon is an array
+      isActive: true
     });
 
     try {
       await subService.save(); // Save the new subservice
       service.subServices.push(subService._id); // Add the subservice ID to the service
       await service.save(); // Save the updated service
-  } catch (error) {
+    } catch (error) {
       console.error('Error adding subservice:', error);
-      // Handle the error (e.g., send a response or throw an error)
-  }
-  //  Populate service details in response
-  //   const populatedSubService = await SubService.findById(subService._id).populate('service');
+      return res.status(500).json({
+        success: false,
+        message: "Error saving subservice: " + error.message
+      });
+    }
+
+    // Populate service details in response
+    const populatedSubService = await SubService.findById(subService._id)
+      .populate('service', 'name description')
+      .lean();
 
     // const subCategory = await SubCategory.findById(service.subCategory);
     // if (subCategory) {
@@ -218,7 +224,7 @@ exports.addSubService = async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Sub-service added successfully",
-      data: populatedSubService
+      data: populatedSubService || subService
     });
 
   } catch (error) {
@@ -233,7 +239,7 @@ exports.addSubService = async (req, res) => {
 // Update service category
 exports.updateServiceCategory = async (req, res) => {
   try {
-    const { name, description, subtitle, icon, isActive } = req.body;
+    const { name, description, subtitle, icon, order, isActive } = req.body;
 
     // Find the existing category
     const existingCategory = await ServiceCategory.findById(req.params.categoryId);
@@ -249,6 +255,7 @@ exports.updateServiceCategory = async (req, res) => {
     if (name) updateData.name = name.trim();
     if (description) updateData.description = description.trim();
     if (subtitle) updateData.subtitle = subtitle.trim();
+    if (order !== undefined) updateData.order = parseInt(order);
     if (isActive !== undefined) updateData.isActive = isActive;
     
     // Handle icon update - support both file upload and emoji/string
@@ -384,12 +391,17 @@ exports.createCategory = async (req, res) => {
             });
         }
 
+        // Get the highest order number and add 1 for new category
+        const maxOrderCategory = await ServiceCategory.findOne().sort({ order: -1 });
+        const nextOrder = maxOrderCategory ? (maxOrderCategory.order || 0) + 1 : 1;
+
         // Create new category
         const category = new ServiceCategory({
             name: req.body.name.trim(),
             description: req.body.description.trim(),
             subtitle: req.body.subtitle.trim(),
             icon: iconValue,
+            order: req.body.order !== undefined ? parseInt(req.body.order) : nextOrder,
             isActive: req.body.isActive !== undefined ? req.body.isActive : true
         });
 
@@ -1071,7 +1083,7 @@ exports.getAllCategoriesWithDetails = async (req, res) => {
     try {
         const categories = await ServiceCategory.find()
             .populate({
-                path: 'subCategories', // Assuming the ServiceCategory model has a field 'subCategories'
+                path: 'subcategories', // Fixed: use lowercase 'subcategories' to match schema
                 populate: {
                     path: 'services', // Assuming the SubCategory model has a field 'services'
                     populate: {
@@ -1086,7 +1098,7 @@ exports.getAllCategoriesWithDetails = async (req, res) => {
             name: category.name,
             description: category.description,
             icon: category.icon,
-            subCategories: category.subCategories // This will include services and sub-services
+            subcategories: category.subcategories // Fixed: use lowercase to match schema
         }));
 
         res.status(200).json({
@@ -1780,43 +1792,51 @@ exports.deletePartnerServiceHub = async (req, res) => {
 // Get all available service hubs (for partner selection during onboarding)
 exports.getAllAvailableServiceHubs = async (req, res) => {
     try {
-        // Get all partners and collect all their hubs
-        const partners = await Partner.find({}).select('serviceHubs profile');
+        // Use the new Hub model to fetch all active hubs
+        const Hub = require('../models/Hub');
         
-        const allHubs = [];
-        partners.forEach(partner => {
-            if (partner.serviceHubs && Array.isArray(partner.serviceHubs)) {
-                partner.serviceHubs.forEach(hub => {
-                    allHubs.push({
-                        _id: hub._id,
-                        name: hub.name,
-                        pinCodes: hub.pinCodes || [],
-                        isPrimary: hub.isPrimary || false,
-                        createdAt: hub.createdAt
-                    });
-                });
-            }
-        });
+        const hubs = await Hub.find({ status: 'active' })
+            .select('name areas city state description')
+            .lean();
 
-        // Remove duplicates based on name and pinCodes combination
-        const uniqueHubs = [];
-        const seen = new Set();
-        
-        allHubs.forEach(hub => {
-            const key = `${hub.name}-${hub.pinCodes.sort().join(',')}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                uniqueHubs.push(hub);
-            }
+        // Transform hubs to match the expected format for partner onboarding
+        const formattedHubs = hubs.map(hub => {
+            // Get all pin codes from all areas
+            const allPinCodes = hub.areas.reduce((acc, area) => {
+                return [...acc, ...(area.pinCodes || [])];
+            }, []);
+            
+            // Remove duplicates
+            const uniquePinCodes = [...new Set(allPinCodes)];
+
+            return {
+                _id: hub._id,
+                name: hub.name,
+                pinCodes: uniquePinCodes,
+                areas: hub.areas.map(area => ({
+                    _id: area._id,
+                    areaName: area.areaName,
+                    pinCodes: area.pinCodes || []
+                })),
+                city: hub.city,
+                state: hub.state,
+                description: hub.description,
+                isPrimary: false, // Can be set based on partner's selection
+                createdAt: hub.createdAt
+            };
         });
 
         res.json({
             success: true,
-            data: uniqueHubs
+            data: formattedHubs
         });
     } catch (error) {
         console.error('Get All Available Service Hubs Error:', error);
-        res.status(500).json({ success: false, message: 'Failed to fetch available service hubs', error: error.message });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch available service hubs', 
+            error: error.message 
+        });
     }
 };
 
