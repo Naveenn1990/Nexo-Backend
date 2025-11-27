@@ -1,6 +1,10 @@
 const registerFeeController = require("../controllers/registerFeeController");
+const feeManagementController = require("../controllers/feeManagementController");
 const express = require('express');
 const router = express.Router();
+
+// Public fees endpoint for partner onboarding (same as admin but no auth required)
+router.get("/fees", feeManagementController.getFees);
 
 router.post("/updatePricingSettings", registerFeeController.updatePricingSettings);
 

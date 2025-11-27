@@ -899,7 +899,21 @@ exports.acceptBooking = async (req, res) => {
       updatedBooking.subService,
       updatedBooking.partner,
       admins
-    )
+    );
+
+    // Additional notification using notification service - Ensure admin gets notified
+    try {
+      const { sendAllAdminsNotification } = require("../services/notificationService");
+      await sendAllAdminsNotification(
+        'Booking Accepted by Partner',
+        `Partner ${updatedBooking.partner?.profile?.name || updatedBooking.partner?.phone || 'Unknown'} has accepted booking #${bookingId} for ${updatedBooking.subService?.name || 'Service'}.`,
+        'info',
+        '/android-chrome-192x192.png'
+      );
+      console.log('[Notification] Admin notification sent for booking acceptance');
+    } catch (adminNotifError) {
+      console.error('[Notification] Failed to send admin notification for acceptance:', adminNotifError);
+    }
 
     Booking.generateMissingOTPs()
 
@@ -1066,12 +1080,31 @@ exports.rejectBooking = async (req, res) => {
       bookingId,
       { status: "rejected", partner: partnerId }, // Added 'partner' field here
       { new: true }
-    ).populate("subService");
+    )
+      .populate("subService")
+      .populate("user")
+      .populate("partner");
+
+    // Send notification to partner
     await NotificationModel.create({
       userId: partnerId,
       title: "Rejected Booking",
       message: `Your booking for ${updatedBooking.subService.name} has been Rejected!`,
     });
+
+    // Send admin notification
+    try {
+      const { sendAllAdminsNotification } = require("../services/notificationService");
+      await sendAllAdminsNotification(
+        'Booking Rejected by Partner',
+        `Partner ${updatedBooking.partner?.profile?.name || updatedBooking.partner?.phone || 'Unknown'} rejected booking #${bookingId} for ${updatedBooking.subService?.name || 'Service'}`,
+        'info'
+      );
+      console.log('[Notification] Admin notification sent for booking rejection');
+    } catch (adminNotifError) {
+      console.error('[Notification] Failed to send admin notification for rejection:', adminNotifError);
+    }
+
     res.status(200).json({
       success: true,
       message: "Booking rejected successfully",
@@ -1092,9 +1125,11 @@ exports.rejectBooking = async (req, res) => {
 
 const sendBookingCompletionNotifications = async (booking, user, subService, partner, admins) => {
   try {
+    const { sendPartnerNotification, sendAllAdminsNotification } = require("../services/notificationService");
+    
     // User notification
     const userNotification = {
-      message: `Your booking for ${subService.name} has been completed by ${partner.name}. Please provide your feedback!`,
+      message: `Your booking for ${subService.name} has been completed by ${partner.profile?.name || partner.name || 'Partner'}. Please provide your feedback!`,
       booking: booking._id,
       seen: false,
       date: new Date(),
@@ -1118,7 +1153,7 @@ const sendBookingCompletionNotifications = async (booking, user, subService, par
           title: 'Booking Completed',
           body: userNotification.message,
           timestamp: new Date().toISOString(),
-          partnerName: partner.name,
+          partnerName: partner.profile?.name || partner.name || 'Partner',
           action: 'rate_booking'
         },
         token: user.fcmToken,
@@ -1142,86 +1177,29 @@ const sendBookingCompletionNotifications = async (booking, user, subService, par
       await admin.messaging().send(userMessage);
     }
 
-    // Partner notification
-    const partnerNotification = {
-      message: `You have successfully completed booking for ${subService.name}. Payment will be processed shortly.`,
-      booking: booking._id,
-      seen: false,
-      date: new Date(),
-      type: 'booking_completed'
-    };
-
-    // Add notification to partner
-    partner.notifications.push(partnerNotification);
-    await partner.save();
-
-    // Send FCM to partner if token exists
-    if (partner.fcmToken) {
-      const partnerMessage = {
-        notification: {
-          title: 'Booking Completed',
-          body: partnerNotification.message
-        },
-        data: {
-          bookingId: booking._id.toString(),
-          type: 'partner_booking_completed',
-          title: 'Booking Completed',
-          body: partnerNotification.message,
-          timestamp: new Date().toISOString(),
-          paymentStatus: booking.paymentStatus
-        },
-        token: partner.fcmToken,
-        android: {
-          priority: 'high',
-          ttl: 60 * 60 * 24 * 3 // 3 days retention
-        }
-      };
-
-      await admin.messaging().send(partnerMessage);
+    // Notify partner using notification service
+    try {
+      await sendPartnerNotification(
+        partner._id,
+        'Job Completed Successfully',
+        `You have successfully completed booking for ${subService.name}. Payment will be processed shortly.`,
+        'job_completed'
+      );
+      console.log('[Notification] Partner notification sent for job completion');
+    } catch (partnerNotifError) {
+      console.error('[Notification] Failed to send partner notification:', partnerNotifError);
     }
 
-    // Admin notifications
-    const adminNotificationMessage = `Booking #${booking._id} for ${subService.name} has been completed by partner ${partner.name}.`;
-
-    const adminNotification = {
-      message: adminNotificationMessage,
-      booking: booking._id,
-      seen: false,
-      date: new Date(),
-      type: 'booking_completed'
-    };
-
-    // Add notification to all admins
-    await Admin.updateMany(
-      {},
-      { $push: { notifications: adminNotification } }
-    );
-
-    // Send FCM to all admins with tokens
-    const adminTokens = admins.filter(a => a.fcmToken).map(a => a.fcmToken);
-    if (adminTokens.length > 0) {
-      const adminMessage = {
-        notification: {
-          title: 'Booking Completed',
-          body: adminNotificationMessage
-        },
-        data: {
-          bookingId: booking._id.toString(),
-          type: 'admin_booking_completed',
-          title: 'Booking Completed',
-          body: adminNotificationMessage,
-          timestamp: new Date().toISOString(),
-          partnerName: partner.name,
-          paymentStatus: booking.paymentStatus
-        },
-        tokens: adminTokens,
-        android: {
-          priority: 'high',
-          ttl: 60 * 60 * 24 * 3 // 3 days retention
-        }
-      };
-
-      await admin.messaging().sendMulticast(adminMessage);
+    // Notify all admins using notification service
+    try {
+      await sendAllAdminsNotification(
+        'Job Completed by Partner',
+        `Partner ${partner.profile?.name || partner.name || 'Unknown'} completed booking #${booking.bookingId || booking._id.toString().slice(-8)} for ${subService.name}`,
+        'info'
+      );
+      console.log('[Notification] Admin notifications sent for job completion');
+    } catch (adminNotifError) {
+      console.error('[Notification] Failed to send admin notifications:', adminNotifError);
     }
 
     return true;
@@ -1237,7 +1215,7 @@ exports.completeBooking = async (req, res) => {
     const { id } = req.params;
     console.log("check", req.body);
     const files = req.files;
-    const { payamout, paymentMode, teamMember } = req.body;
+    const { payamout, paymentMode, teamMember, remark } = req.body;
 
 
     // Process file uploads
@@ -1263,6 +1241,7 @@ exports.completeBooking = async (req, res) => {
         videos,
         completedAt: new Date(),
         ...(teamMember && { teamMember }), // Add teamMember if provided
+        ...(remark && { remark }), // Add remark if provided
       },
       { new: true }
     )
@@ -1315,7 +1294,7 @@ exports.completeBooking = async (req, res) => {
     // Get admin details for notifications
     const admins = await Admin.find({}).select('fcmToken');
 
-    // Send completion notifications (non-blocking)
+    // Send completion notifications (non-blocking but with better error handling)
     sendBookingCompletionNotifications(
       booking,
       booking.user,
@@ -1323,10 +1302,27 @@ exports.completeBooking = async (req, res) => {
       booking.partner,
       admins
     ).then(success => {
-      if (!success) {
-        console.log('Completion notifications partially failed');
+      if (success) {
+        console.log('[Notification] Completion notifications sent successfully');
+      } else {
+        console.error('[Notification] Completion notifications failed');
       }
+    }).catch(error => {
+      console.error('[Notification] Error in completion notifications:', error);
     });
+
+    // Also send direct admin notification to ensure it's sent
+    try {
+      const { sendAllAdminsNotification } = require("../services/notificationService");
+      await sendAllAdminsNotification(
+        'Job Completed by Partner',
+        `Partner ${booking.partner?.profile?.name || booking.partner?.name || 'Unknown'} completed booking #${booking.bookingId || booking._id.toString().slice(-8)} for ${booking.subService?.name || 'service'}`,
+        'info'
+      );
+      console.log('[Notification] Direct admin notification sent for job completion');
+    } catch (directNotifError) {
+      console.error('[Notification] Direct admin notification failed:', directNotifError);
+    }
 
     res.status(200).json({
       success: true,
@@ -1523,6 +1519,7 @@ exports.getRejectedBookings = async (req, res) => {
 
 const sendBookingPauseNotifications = async (booking, user, subService, partner, admins, pauseDetails) => {
   try {
+    const { sendPartnerNotification, sendAllAdminsNotification } = require("../services/notificationService");
     // Validate required parameters
     if (!booking || !user || !subService || !partner || !pauseDetails) {
       console.error('Missing required parameters for booking pause notification');
@@ -1586,90 +1583,29 @@ const sendBookingPauseNotifications = async (booking, user, subService, partner,
       await admin.messaging().send(userMessage);
     }
 
-    // Partner notification
-    const partnerNotification = {
-      message: `You have paused booking for ${subService.name}. Reason: ${pauseDetails.pauseReason}. Will resume on ${pauseDetails.nextScheduledDate}`,
-      booking: booking._id,
-      seen: false,
-      date: new Date(),
-      type: 'booking_paused'
-    };
-
-    // Add notification to partner
-    partner.notifications.push(partnerNotification);
-    await partner.save();
-
-    // Send FCM to partner if token exists
-    if (partner.fcmToken) {
-      const partnerMessage = {
-        notification: {
-          title: 'Booking Paused',
-          body: partnerNotification.message
-        },
-        data: {
-          bookingId: booking._id.toString(),
-          type: 'partner_booking_paused',
-          title: 'Booking Paused',
-          body: partnerNotification.message,
-          timestamp: new Date().toISOString(),
-          resumeDate: pauseDetails.nextScheduledDate.toISOString(),
-          pauseReason: pauseDetails.pauseReason
-        },
-        token: partner.fcmToken,
-        android: {
-          priority: 'high',
-          ttl: 60 * 60 * 24 * 7 // 1 week retention
-        }
-      };
-
-      await admin.messaging().send(partnerMessage);
+    // Notify partner using notification service
+    try {
+      await sendPartnerNotification(
+        partner._id,
+        'Job Paused',
+        `You have paused booking for ${subService.name}. Reason: ${pauseDetails.pauseReason}. Will resume on ${new Date(pauseDetails.nextScheduledDate).toLocaleDateString()} at ${pauseDetails.nextScheduledTime}`,
+        'job_paused'
+      );
+      console.log('[Notification] Partner notification sent for job pause');
+    } catch (partnerNotifError) {
+      console.error('[Notification] Failed to send partner notification:', partnerNotifError);
     }
 
-    // Admin notifications
-    const adminNotificationMessage = `Booking #${booking._id} for ${subService.name} has been paused by partner ${partner.name}. Reason: ${pauseDetails.pauseReason}. Will resume on ${pauseDetails.nextScheduledDate}`;
-
-    const adminNotification = {
-      message: adminNotificationMessage,
-      booking: booking._id,
-      seen: false,
-      date: new Date(),
-      type: 'booking_paused'
-    };
-
-    // Add notification to all admins
-    await Admin.updateMany(
-      {},
-      { $push: { notifications: adminNotification } }
-    );
-
-    // Send FCM to all admins with tokens (only if admins array exists)
-    if (admins && Array.isArray(admins)) {
-      const adminTokens = admins.filter(a => a && a.fcmToken).map(a => a.fcmToken);
-      if (adminTokens.length > 0) {
-        const adminMessage = {
-          notification: {
-            title: 'Booking Paused',
-            body: adminNotificationMessage
-          },
-          data: {
-            bookingId: booking._id.toString(),
-            type: 'admin_booking_paused',
-            title: 'Booking Paused',
-            body: adminNotificationMessage,
-            timestamp: new Date().toISOString(),
-            partnerName: partner.name,
-            resumeDate: pauseDetails.nextScheduledDate.toISOString(),
-            pauseReason: pauseDetails.pauseReason
-          },
-          tokens: adminTokens,
-          android: {
-            priority: 'high',
-            ttl: 60 * 60 * 24 * 7 // 1 week retention
-          }
-        };
-
-        await admin.messaging().sendMulticast(adminMessage);
-      }
+    // Notify all admins using notification service
+    try {
+      await sendAllAdminsNotification(
+        'Job Paused by Partner',
+        `Partner ${partner.profile?.name || partner.name || 'Unknown'} paused booking #${booking.bookingId || booking._id.toString().slice(-8)} for ${subService.name}. Reason: ${pauseDetails.pauseReason}. Will resume on ${new Date(pauseDetails.nextScheduledDate).toLocaleDateString()} at ${pauseDetails.nextScheduledTime}`,
+        'info'
+      );
+      console.log('[Notification] Admin notifications sent for job pause');
+    } catch (adminNotifError) {
+      console.error('[Notification] Failed to send admin notifications:', adminNotifError);
     }
 
     return true;
@@ -1748,7 +1684,7 @@ exports.pauseBooking = async (req, res) => {
     // Get admin details for notifications
     const admins = await Admin.find({});
 
-    // Send notifications (non-blocking)
+    // Send notifications (non-blocking but with better error handling)
     sendBookingPauseNotifications(
       booking,
       booking.user,
@@ -1757,10 +1693,27 @@ exports.pauseBooking = async (req, res) => {
       admins,
       pauseDetails
     ).then(success => {
-      if (!success) {
-        console.log('Pause notifications partially failed');
+      if (success) {
+        console.log('[Notification] Pause notifications sent successfully');
+      } else {
+        console.error('[Notification] Pause notifications failed');
       }
+    }).catch(error => {
+      console.error('[Notification] Error in pause notifications:', error);
     });
+
+    // Also send direct admin notification to ensure it's sent
+    try {
+      const { sendAllAdminsNotification } = require("../services/notificationService");
+      await sendAllAdminsNotification(
+        'Job Paused by Partner',
+        `Partner ${booking.partner?.profile?.name || booking.partner?.name || 'Unknown'} paused booking #${booking.bookingId || booking._id.toString().slice(-8)} for ${booking.subService?.name || 'service'}. Reason: ${pauseReason || 'Not specified'}. Will resume on ${new Date(nextScheduledDate).toLocaleDateString()} at ${nextScheduledTime}`,
+        'info'
+      );
+      console.log('[Notification] Direct admin notification sent for job pause');
+    } catch (directNotifError) {
+      console.error('[Notification] Direct admin notification failed:', directNotifError);
+    }
 
     res.status(200).json({
       success: true,
@@ -1817,7 +1770,10 @@ exports.resumeBooking = async (req, res) => {
       _id: bookingId,
       partner: req.partner._id,
       status: "paused",
-    });
+    })
+      .populate('user')
+      .populate('subService')
+      .populate('partner');
 
     if (!booking) {
       return res.status(404).json({
@@ -1836,6 +1792,39 @@ exports.resumeBooking = async (req, res) => {
     booking.pauseDetails = undefined; // Clear pause details
 
     await booking.save();
+
+    // Send notifications to admin and partner
+    try {
+      const { sendPartnerNotification, sendAllAdminsNotification } = require("../services/notificationService");
+      
+      // Notify partner
+      try {
+        await sendPartnerNotification(
+          booking.partner._id,
+          'Job Resumed',
+          `Job for ${booking.subService?.name || 'service'} has been resumed. Scheduled for ${new Date(nextScheduledDate).toLocaleDateString()} at ${nextScheduledTime}`,
+          'job_resumed'
+        );
+        console.log('[Notification] Partner notification sent for job resume');
+      } catch (partnerNotifError) {
+        console.error('[Notification] Failed to send partner notification:', partnerNotifError);
+      }
+
+      // Notify all admins
+      try {
+        await sendAllAdminsNotification(
+          'Job Resumed by Partner',
+          `Partner ${booking.partner?.profile?.name || booking.partner?.phone || 'Unknown'} resumed job for ${booking.subService?.name || 'service'}. Booking ID: ${booking.bookingId || booking._id.toString().slice(-8)}`,
+          'info'
+        );
+        console.log('[Notification] Admin notifications sent for job resume');
+      } catch (adminNotifError) {
+        console.error('[Notification] Failed to send admin notifications:', adminNotifError);
+      }
+    } catch (notifError) {
+      console.error('[Notification] General notification error:', notifError);
+      // Don't fail the request if notifications fail
+    }
 
     res.status(200).json({
       success: true,
@@ -2408,7 +2397,7 @@ exports.sendOtpWithNotification = async (req, res) => {
     }
     const otp = Math.floor(100000 + Math.random() * 900000).toString(); // Generate a 6-digit OTP
     if (!user.fcmToken) {
-      // await sendOTP(user.phone, otp);
+      await sendOTP(user.phone, otp);
       booking.otp = otp; // Save OTP to booking
       await booking.save();
       return res.status(200).json({ message: "OTP sent successfully" });
@@ -2482,7 +2471,7 @@ exports.sendOtpWithNotification = async (req, res) => {
         console.log(`No FCM token for user: ${user._id}`);
       }
     } catch (error) {
-      // sendOTP(user.phone, otp);
+      sendOTP(user.phone, otp);
     }
 
 
@@ -2539,7 +2528,7 @@ exports.sendSmsOtp = async (req, res) => {
     }
     const otp = Math.floor(100000 + Math.random() * 900000).toString(); // Generate a 6-digit OTP
 
-    // await sendOTP(user.phone, otp);
+    await sendOTP(user.phone, otp);
     booking.otp = otp; // Save OTP to booking
     await booking.save();
     return res.status(200).json({ message: "OTP sent successfully" });

@@ -94,8 +94,28 @@ const verifyOTP = async (req, res) => {
     partner.tempOTP = undefined;
     await partner.save();
 
+    // Return complete partner data for frontend
+    const partnerData = {
+      _id: partner._id,
+      token: token,
+      phone: partner.phone,
+      name: partner.profile?.name,
+      email: partner.profile?.email,
+      profileCompleted: partner.profileCompleted,
+      partnerType: partner.partnerType || 'individual',
+      profile: partner.profile,
+      whatsappNumber: partner.whatsappNumber,
+      qualification: partner.qualification,
+      experience: partner.experience,
+      profilePicture: partner.profilePicture,
+      referralCode: partner.referralCode,
+      status: partner.kycStatus || partner.status
+    };
+
     res.status(200).json({
+      success: true,
       token,
+      partner: partnerData,
       isProfileCompleted: partner.profileCompleted,
       partnerId: partner._id,
       status: partner.kycStatus,

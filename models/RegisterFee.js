@@ -14,6 +14,24 @@ const pricingSettingsSchema = new mongoose.Schema({
     min: 0,
     default: 1000
   },
+  securityDepositOptions: [{
+    amount: {
+      type: Number,
+      required: true
+    },
+    label: {
+      type: String,
+      required: true
+    },
+    description: {
+      type: String,
+      default: ''
+    },
+    default: {
+      type: Boolean,
+      default: false
+    }
+  }],
   toolkitPrice: {
     type: Number,
     required: true,
@@ -61,6 +79,62 @@ const pricingSettingsSchema = new mongoose.Schema({
     default: false
   },
   toolkitPriceRefundable: {
+    type: Boolean,
+    default: false
+  },
+  // Individual Partner Fees
+  individualRegistrationFee: {
+    type: Number,
+    min: 0,
+    default: 500
+  },
+  individualSecurityDeposit: {
+    type: Number,
+    min: 0,
+    default: 1000
+  },
+  individualToolkitPrice: {
+    type: Number,
+    min: 0,
+    default: 2499
+  },
+  individualRegistrationFeeRefundable: {
+    type: Boolean,
+    default: false
+  },
+  individualSecurityDepositRefundable: {
+    type: Boolean,
+    default: false
+  },
+  individualToolkitPriceRefundable: {
+    type: Boolean,
+    default: false
+  },
+  // Franchise Partner Fees
+  franchiseRegistrationFee: {
+    type: Number,
+    min: 0,
+    default: 500
+  },
+  franchiseSecurityDeposit: {
+    type: Number,
+    min: 0,
+    default: 1000
+  },
+  franchiseToolkitPrice: {
+    type: Number,
+    min: 0,
+    default: 2499
+  },
+  franchiseRegistrationFeeRefundable: {
+    type: Boolean,
+    default: false
+  },
+  franchiseSecurityDepositRefundable: {
+    type: Boolean,
+    default: false
+  },
+  franchiseToolkitPriceRefundable: {
     type: Boolean,
     default: false
   }

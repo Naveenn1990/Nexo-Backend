@@ -89,30 +89,60 @@ const uploadFile = (file, bucketname) => {
   });
 };
 
+// const uploadFile2 = (file, bucketname) => {
+//   return new Promise((resolve, reject) => {
+//     // const file = files.image[0];
+//     // console.log(file,bucketname);
+//     const params = {
+//       Bucket: process.env.AWS_S3_BUCKET_NAME,
+//       Key: `${bucketname}/${Date.now() + "_" + file.originalname}`,
+//       Body: file.buffer,
+//       ContentType: file.mimetype,
+//     };
+//     s3Client.putObject(params, (err, data) => {
+//       if (err) {
+//         reject("File not uploaded");
+//       } else {
+//         // console.log(data);
+//         let location = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.amazonaws.com/${params.Key}`;
+//         console.log(location);
+//         resolve(location);
+//       }
+//     });
+//   });
+// };
+
 const uploadFile2 = (file, bucketname) => {
   return new Promise((resolve, reject) => {
-    // const file = files.image[0];
-    // console.log(file,bucketname);
-    const params = {
-      Bucket: process.env.AWS_S3_BUCKET_NAME,
-      Key: `${bucketname}/${Date.now() + "_" + file.originalname}`,
-      Body: file.buffer,
-      ContentType: file.mimetype,
-    };
-    s3Client.putObject(params, (err, data) => {
+    // Create uploads directory if it doesn't exist
+    const uploadsDir = path.join(__dirname, '../uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    // Create bucket subdirectory if it doesn't exist
+    const bucketDir = path.join(uploadsDir, bucketname);
+    if (!fs.existsSync(bucketDir)) {
+      fs.mkdirSync(bucketDir, { recursive: true });
+    }
+
+    // Generate unique filename
+    const filename = `${Date.now()}_${file.originalname}`;
+    const filePath = path.join(bucketDir, filename);
+
+    // Write file to local storage
+    fs.writeFile(filePath, file.buffer, (err) => {
       if (err) {
         reject("File not uploaded");
       } else {
-        // console.log(data);
-        let location = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.amazonaws.com/${params.Key}`;
+        // Return proper URL for local file access
+        let location = `http://localhost:${process.env.PORT || 3000}/uploads/${bucketname}/${filename}`;
         console.log(location);
         resolve(location);
       }
     });
   });
 };
-
-
 const getUrlFileKey = (url) => {
   const regex = /^https?:\/\/([^\.]+)\.s3.amazonaws.com\/(.+)$/;
   const match = url.match(regex);

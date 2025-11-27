@@ -354,7 +354,7 @@ exports.sendLoginOTP = async (req, res) => {
       route: "TRANS",
       sender: "WVETEC",
       mobileno: phone,
-      text: `Welcome to Wave Tech Services your Mobile Number Verification Code is ${otp}`
+      text: `🔐 Nexo Works - OTP Verification\n\nYour One-Time Password (OTP) for mobile number verification is:\n\n${otp}\n\nThis OTP is valid for 10 minutes. Please do not share this code with anyone.\n\nIf you didn't request this OTP, please ignore this message.\n\n━━━━━━━━━━━━━━━━━━━━\nThank you for choosing Nexo Works!\nWe appreciate your trust in our services.\n\nBest regards,\nNexo Works Team`
     };
 
     // Convert parameters to query string
@@ -371,7 +371,7 @@ exports.sendLoginOTP = async (req, res) => {
     console.log(`OTP generated for ${phone}: ${otp}`); // For debugging
 
     // Send OTP
-    // await sendOTP(phone, otp);
+    await sendOTP(phone, otp);
 
     res.json({
       success: true,
@@ -480,7 +480,7 @@ exports.sendForgotPasswordOTP = async (req, res) => {
     console.log(`Forgot password OTP generated for ${phone}: ${otp}`); // For debugging
 
     // Send OTP
-    // await sendOTP(phone, otp);
+    await sendOTP(phone, otp);
 
     res.json({
       success: true,

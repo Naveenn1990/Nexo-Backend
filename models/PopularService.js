@@ -110,7 +110,37 @@ const popularServiceSchema = new mongoose.Schema({
       type: String,
       trim: true,
       default: 'FaTools'
-    }
+    },
+    included: [{
+      type: String,
+      trim: true
+    }],
+    excluded: [{
+      type: String,
+      trim: true
+    }],
+    subServices: [{
+      name: {
+        type: String,
+        trim: true,
+        default: ''
+      },
+      shortDescription: {
+        type: String,
+        trim: true,
+        default: ''
+      },
+      price: {
+        type: String,
+        trim: true,
+        default: ''
+      },
+      icon: {
+        type: String,
+        trim: true,
+        default: 'FaTools'
+      }
+    }]
   }],
   order: {
     type: Number,

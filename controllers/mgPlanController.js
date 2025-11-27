@@ -9,7 +9,18 @@ const mongoose = require('mongoose');
 exports.getAllPlans = async (req, res) => {
   try {
     const isAdminRequest = Boolean(req.admin);
-    const query = isAdminRequest ? {} : { isActive: true };
+    const { partnerType } = req.query;
+    
+    let query = isAdminRequest ? {} : { isActive: true };
+    
+    // Filter by partner type if provided
+    if (partnerType && ['individual', 'franchise'].includes(partnerType)) {
+      query.$or = [
+        { partnerType: partnerType },
+        { partnerType: 'both' }
+      ];
+    }
+    
     const plans = await MGPlan.find(query).sort({ price: 1 });
     res.json({
       success: true,
@@ -68,7 +79,8 @@ exports.createPlan = async (req, res) => {
       isDefault,
       icon,
       validityType,
-      validityMonths
+      validityMonths,
+      partnerType
     } = req.body;
     
     // Validate required fields
@@ -109,7 +121,8 @@ exports.createPlan = async (req, res) => {
       isDefault: isDefault || false,
       icon: icon || '',
       validityType: validityType || 'monthly',
-      validityMonths: calculatedValidityMonths
+      validityMonths: calculatedValidityMonths,
+      partnerType: partnerType || 'individual'
     });
     
     await plan.save();
@@ -147,7 +160,8 @@ exports.updatePlan = async (req, res) => {
       isDefault,
       icon,
       validityType,
-      validityMonths
+      validityMonths,
+      partnerType
     } = req.body;
     
     const plan = await MGPlan.findById(planId);
@@ -173,6 +187,7 @@ exports.updatePlan = async (req, res) => {
     if (minWalletBalance !== undefined) plan.minWalletBalance = minWalletBalance;
     if (features !== undefined) plan.features = features;
     if (isActive !== undefined) plan.isActive = isActive;
+    if (partnerType !== undefined) plan.partnerType = partnerType;
     
     // Handle validity updates
     if (validityType !== undefined) {
@@ -662,6 +677,176 @@ exports.getPartnerPlan = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching partner plan',
+      error: error.message
+    });
+  }
+};
+
+// Admin: Subscribe partner to MG Plan with payment details
+exports.adminSubscribeToPlan = async (req, res) => {
+  try {
+    const { planId } = req.params;
+    const { partnerId, paymentMethod, collectedBy, transactionId } = req.body;
+    
+    if (!partnerId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Partner ID is required'
+      });
+    }
+    
+    if (!planId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Plan ID is required'
+      });
+    }
+    
+    // Validate payment details
+    if (!paymentMethod || !['cash', 'online', 'upi'].includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid payment method is required (cash, online, or upi)'
+      });
+    }
+    
+    if (paymentMethod === 'cash' && !collectedBy) {
+      return res.status(400).json({
+        success: false,
+        message: 'Collected by name is required for cash payments'
+      });
+    }
+    
+    if ((paymentMethod === 'online' || paymentMethod === 'upi') && !transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required for online/UPI payments'
+      });
+    }
+    
+    const plan = await MGPlan.findById(planId);
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Plan not found'
+      });
+    }
+    
+    const partner = await Partner.findById(partnerId)
+      .populate('category', 'name')
+      .populate('service', 'name');
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner not found'
+      });
+    }
+    
+    const partnerName = partner.profile?.name || partner.name || partner.phone || 'Unknown Partner';
+    
+    const subscribedAt = new Date();
+    const expiresAt = new Date(subscribedAt);
+    const validityMonths = plan.validityMonths || 1;
+    expiresAt.setMonth(expiresAt.getMonth() + validityMonths);
+
+    partner.mgPlan = planId;
+    partner.mgPlanLeadQuota = plan.leads;
+    partner.mgPlanLeadsUsed = 0;
+    partner.mgPlanSubscribedAt = subscribedAt;
+    partner.mgPlanExpiresAt = expiresAt;
+    partner.leadAcceptancePaused = false;
+
+    const historyEntry = {
+      plan: plan._id,
+      planName: plan.name,
+      price: plan.price,
+      leadsGuaranteed: plan.leads,
+      commissionRate: plan.commission,
+      leadFee: plan.leadFee,
+      subscribedAt,
+      expiresAt,
+      leadsConsumed: 0,
+      refundStatus: 'pending',
+      refundNotes: plan.refundPolicy,
+      paymentMethod,
+      ...(paymentMethod === 'cash' ? { collectedBy } : { transactionId })
+    };
+
+    if (!Array.isArray(partner.mgPlanHistory)) {
+      partner.mgPlanHistory = [];
+    }
+    partner.mgPlanHistory.push(historyEntry);
+    if (partner.mgPlanHistory.length > 24) {
+      partner.mgPlanHistory = partner.mgPlanHistory.slice(-24);
+    }
+    partner.markModified('mgPlanHistory');
+
+    await partner.save();
+    
+    // Record MG Plan fee transaction with payment details
+    try {
+      const timestamp = Date.now();
+      const uniqueId = transactionId || partnerId.toString();
+      
+      const transactionData = {
+        partnerId: partnerId.toString(),
+        amount: plan.price,
+        status: 'success',
+        paymentMethod: paymentMethod,
+        transactionId: transactionId || `MG-${uniqueId}-${timestamp}`,
+        feeType: 'mg_plan',
+        description: `MG Plan Subscription - ${plan.name} - Partner: ${partnerName} (Admin Assigned)`,
+        metadata: {
+          planId: planId.toString(),
+          planName: plan.name,
+          leadsGuaranteed: plan.leads,
+          commissionRate: plan.commission,
+          leadFee: plan.leadFee,
+          validityMonths: plan.validityMonths || 1,
+          subscribedAt: subscribedAt,
+          expiresAt: expiresAt,
+          partnerName: partnerName,
+          partnerPhone: partner.phone || null,
+          partnerEmail: partner.profile?.email || null,
+          paymentMethod: paymentMethod,
+          ...(paymentMethod === 'cash' ? { collectedBy } : { transactionId }),
+          assignedBy: 'admin'
+        }
+      };
+      
+      await PaymentTransaction.create(transactionData);
+    } catch (txnError) {
+      console.error('Error recording MG plan transaction:', txnError);
+      // Don't fail the subscription if transaction recording fails
+    }
+    
+    res.json({
+      success: true,
+      message: 'Successfully subscribed partner to plan',
+      data: {
+        plan,
+        partner: {
+          id: partner._id,
+          name: partnerName,
+          mgPlan: partner.mgPlan,
+          subscribedAt: partner.mgPlanSubscribedAt,
+          expiresAt: partner.mgPlanExpiresAt,
+          leadsGuaranteed: plan.leads,
+          commissionRate: plan.commission,
+          leadFee: plan.leadFee,
+          minWalletBalance: plan.minWalletBalance
+        },
+        paymentDetails: {
+          method: paymentMethod,
+          ...(paymentMethod === 'cash' ? { collectedBy } : { transactionId })
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Admin Subscribe Plan Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subscribing partner to plan',
       error: error.message
     });
   }

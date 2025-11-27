@@ -89,6 +89,7 @@ const bookingSchema = new mongoose.Schema(
     },
     photos: [{ type: String }],
     videos: [{ type: String }],
+    remark: { type: String }, // Partner remark when completing the job
 
     // **New Field: Partner Cart (Stores selected products before approval)**
     cart: [

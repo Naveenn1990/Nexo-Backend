@@ -3,9 +3,7 @@ const mongoose = require('mongoose');
 const mgPlanSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true,
-    enum: ['Silver', 'Gold', 'Platinum'],
-    unique: true
+    required: true
   },
   price: {
     type: Number,
@@ -65,10 +63,18 @@ const mgPlanSchema = new mongoose.Schema({
     type: Number,
     default: 1,
     min: 1
+  },
+  partnerType: {
+    type: String,
+    enum: ['individual', 'franchise', 'both'],
+    default: 'individual'
   }
 }, {
   timestamps: true
 });
+
+// Create compound unique index on name + partnerType
+mgPlanSchema.index({ name: 1, partnerType: 1 }, { unique: true });
 
 // Ensure only one default plan exists
 mgPlanSchema.pre('save', async function(next) {

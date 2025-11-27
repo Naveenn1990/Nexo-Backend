@@ -53,6 +53,43 @@ exports.topUpWallet = async (req, res) => {
 
     await wallet.save();
 
+    // Send notifications
+    console.log(`💰 Wallet topup completed: ${lowerType} ₹${transactionAmount} for partner ${partnerId}`);
+    const { sendPartnerNotification, sendAdminNotification } = require("../services/notificationService");
+    const transactionType = lowerType === 'credit' ? 'credited' : 'debited';
+    
+    try {
+      // Notify partner
+      await sendPartnerNotification(
+        partnerId,
+        lowerType === 'credit' ? 'Wallet Credited' : 'Wallet Debited',
+        `Your wallet has been ${transactionType} with ₹${transactionAmount}. ${description || 'Topup'}. Your new balance is ₹${newBalance}.`,
+        lowerType === 'credit' ? 'success' : 'alert',
+        '/android-chrome-192x192.png'
+      );
+      console.log(`✅ Partner notification sent for wallet topup`);
+    } catch (notifError) {
+      console.error(`❌ Error sending partner notification:`, notifError);
+    }
+
+    // Notify all admins about wallet transaction
+    // This works for both admin-initiated and partner self-topup
+    try {
+      const { sendAllAdminsNotification } = require("../services/notificationService");
+      const partnerData = await Partner.findById(partnerId);
+      const partnerName = partnerData?.profile?.name || partnerData?.phone || 'Unknown';
+      
+      await sendAllAdminsNotification(
+        'Wallet Transaction',
+        `Wallet ${lowerType} of ₹${transactionAmount} for partner ${partnerName}. ${description || 'Topup'}. New balance: ₹${newBalance}`,
+        'info',
+        '/android-chrome-192x192.png'
+      );
+      console.log(`✅ Admin notifications sent for wallet topup`);
+    } catch (notifError) {
+      console.error(`❌ Error sending admin notifications:`, notifError);
+    }
+
     res.status(201).json({ 
       success: true,
       message: "Transaction successful", 

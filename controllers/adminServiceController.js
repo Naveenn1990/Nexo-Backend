@@ -145,10 +145,7 @@ exports.getServicesByCategory = async (req, res) => {
 // Add sub-service
 exports.addSubService = async (req, res) => {
   try {
-    console.log('\n=== Add Sub-Service Request ===');
-    console.log('Body:', req.body);
-    console.log('File:', req.file);
-    console.log('Params:', req.params);
+
 
     const { serviceId } = req.params;
     const { name, description, basePrice, duration } = req.body;
@@ -1315,6 +1312,32 @@ exports.updatePartnerStatus = async (req, res) => {
           });
       }
 
+      // Send notification to partner
+      const notificationTitle = status === 'active' ? 'Account Activated' : 'Account Deactivated';
+      const notificationMessage = status === 'active' 
+        ? 'Your partner account has been activated. You can now accept bookings and provide services.'
+        : 'Your partner account has been deactivated. Please contact support for more information.';
+      
+      const { sendPartnerNotification, sendAdminNotification } = require("../services/notificationService");
+      await sendPartnerNotification(
+          partnerId,
+          notificationTitle,
+          notificationMessage,
+          status === 'active' ? 'success' : 'alert',
+          '/android-chrome-192x192.png'
+      );
+
+      // Notify admin
+      if (req.admin) {
+          await sendAdminNotification(
+              req.admin._id,
+              'Partner Status Updated',
+              `Partner ${updatedPartner.profile?.name || updatedPartner.phone} status changed to ${status}.`,
+              'info',
+              '/android-chrome-192x192.png'
+          );
+      }
+
       res.status(200).json({
           success: true,
           message: `Partner's status updated to '${status}'.`,
@@ -1511,13 +1534,18 @@ exports.updatePartnerProfile = async (req, res) => {
     
     // Update Payment Info
     if (registerAmount !== undefined && registerAmount !== '') {
-      updatedPartner.profile.registerAmount = parseFloat(registerAmount) || 0;
+      updatedPartner.registerAmount = parseFloat(registerAmount) || 0;
     }
     if (payId !== undefined) {
-      updatedPartner.profile.payId = payId;
+      updatedPartner.payId = payId;
     }
     if (paidBy !== undefined) {
-      updatedPartner.profile.paidBy = paidBy;
+      updatedPartner.paidBy = paidBy;
+    }
+    
+    // Update Profile Completion Status
+    if (bodyData.profileCompleted !== undefined) {
+      updatedPartner.profileCompleted = bodyData.profileCompleted === true || bodyData.profileCompleted === 'true';
     }
     
     await updatedPartner.save();
@@ -1607,10 +1635,16 @@ exports.getPartnerEarnings = async (req, res) => {
         const isExpired = partner.mgPlanExpiresAt ? now > partner.mgPlanExpiresAt : false;
 
         let refundStatus = 'pending';
+        let paymentMethod = null;
+        let collectedBy = null;
+        let transactionId = null;
         const history = Array.isArray(partner.mgPlanHistory) ? partner.mgPlanHistory : [];
         if (history.length) {
             const latest = history[history.length - 1];
             refundStatus = latest?.refundStatus || refundStatus;
+            paymentMethod = latest?.paymentMethod || null;
+            collectedBy = latest?.collectedBy || null;
+            transactionId = latest?.transactionId || null;
         }
         if (isExpired && leadsUsed < leadsGuaranteed && refundStatus !== 'processed') {
             refundStatus = 'eligible';
@@ -1632,6 +1666,9 @@ exports.getPartnerEarnings = async (req, res) => {
                     expiresAt: partner.mgPlanExpiresAt,
                     isExpired,
                     refundStatus,
+                    paymentMethod,
+                    collectedBy,
+                    transactionId,
                     history
                 }
             },

@@ -3,6 +3,7 @@ const Joi = require('joi');
 
 // Validation schema for fee management
 const feeValidationSchema = Joi.object({
+  partnerType: Joi.string().valid('individual', 'franchise').optional(),
   registrationFee: Joi.number().min(0).required(),
   securityDeposit: Joi.number().min(0).required(),
   toolkitPrice: Joi.number().min(0).required(),
@@ -32,15 +33,35 @@ exports.getFees = async (req, res) => {
       await settings.save();
     }
 
+    // Return both individual and franchise fees
     res.json({
       success: true,
       data: {
+        // Default/Individual fees (backward compatible)
         registrationFee: settings.registrationFee || 500,
         securityDeposit: settings.securityDeposit || 1000,
         toolkitPrice: settings.toolkitPrice || 2499,
         registrationFeeRefundable: settings.registrationFeeRefundable !== undefined ? settings.registrationFeeRefundable : false,
         securityDepositRefundable: settings.securityDepositRefundable !== undefined ? settings.securityDepositRefundable : false,
-        toolkitPriceRefundable: settings.toolkitPriceRefundable !== undefined ? settings.toolkitPriceRefundable : false
+        toolkitPriceRefundable: settings.toolkitPriceRefundable !== undefined ? settings.toolkitPriceRefundable : false,
+        // Individual partner fees
+        individual: {
+          registrationFee: settings.individualRegistrationFee || settings.registrationFee || 500,
+          securityDeposit: settings.individualSecurityDeposit || settings.securityDeposit || 1000,
+          toolkitPrice: settings.individualToolkitPrice || settings.toolkitPrice || 2499,
+          registrationFeeRefundable: settings.individualRegistrationFeeRefundable !== undefined ? settings.individualRegistrationFeeRefundable : (settings.registrationFeeRefundable || false),
+          securityDepositRefundable: settings.individualSecurityDepositRefundable !== undefined ? settings.individualSecurityDepositRefundable : (settings.securityDepositRefundable || false),
+          toolkitPriceRefundable: settings.individualToolkitPriceRefundable !== undefined ? settings.individualToolkitPriceRefundable : (settings.toolkitPriceRefundable || false)
+        },
+        // Franchise partner fees
+        franchise: {
+          registrationFee: settings.franchiseRegistrationFee || settings.registrationFee || 500,
+          securityDeposit: settings.franchiseSecurityDeposit || settings.securityDeposit || 1000,
+          toolkitPrice: settings.franchiseToolkitPrice || settings.toolkitPrice || 2499,
+          registrationFeeRefundable: settings.franchiseRegistrationFeeRefundable !== undefined ? settings.franchiseRegistrationFeeRefundable : (settings.registrationFeeRefundable || false),
+          securityDepositRefundable: settings.franchiseSecurityDepositRefundable !== undefined ? settings.franchiseSecurityDepositRefundable : (settings.securityDepositRefundable || false),
+          toolkitPriceRefundable: settings.franchiseToolkitPriceRefundable !== undefined ? settings.franchiseToolkitPriceRefundable : (settings.toolkitPriceRefundable || false)
+        }
       }
     });
   } catch (error) {
@@ -65,6 +86,8 @@ exports.updateFees = async (req, res) => {
       });
     }
 
+    const partnerType = value.partnerType || 'individual';
+
     // Update or create settings
     let settings = await PricingSettings.findOne();
     
@@ -76,13 +99,29 @@ exports.updateFees = async (req, res) => {
         registrationFeeRefundable: value.registrationFeeRefundable !== undefined ? value.registrationFeeRefundable : false,
         securityDepositRefundable: value.securityDepositRefundable !== undefined ? value.securityDepositRefundable : false,
         toolkitPriceRefundable: value.toolkitPriceRefundable !== undefined ? value.toolkitPriceRefundable : false,
-        originalPrice: value.registrationFee + value.securityDeposit + 500, // Default calculation
+        originalPrice: value.registrationFee + value.securityDeposit + 500,
         specialOfferActive: false,
         commissionRate: 15,
         freeCommissionThreshold: 1000,
         refundPolicy: "Registration fees are non-refundable once payment is processed"
       });
-    } else {
+    }
+
+    // Update partner type specific fees
+    if (partnerType === 'individual') {
+      settings.individualRegistrationFee = value.registrationFee;
+      settings.individualSecurityDeposit = value.securityDeposit;
+      settings.individualToolkitPrice = value.toolkitPrice;
+      if (value.registrationFeeRefundable !== undefined) {
+        settings.individualRegistrationFeeRefundable = value.registrationFeeRefundable;
+      }
+      if (value.securityDepositRefundable !== undefined) {
+        settings.individualSecurityDepositRefundable = value.securityDepositRefundable;
+      }
+      if (value.toolkitPriceRefundable !== undefined) {
+        settings.individualToolkitPriceRefundable = value.toolkitPriceRefundable;
+      }
+      // Also update default fees for backward compatibility
       settings.registrationFee = value.registrationFee;
       settings.securityDeposit = value.securityDeposit;
       settings.toolkitPrice = value.toolkitPrice;
@@ -95,20 +134,34 @@ exports.updateFees = async (req, res) => {
       if (value.toolkitPriceRefundable !== undefined) {
         settings.toolkitPriceRefundable = value.toolkitPriceRefundable;
       }
+    } else if (partnerType === 'franchise') {
+      settings.franchiseRegistrationFee = value.registrationFee;
+      settings.franchiseSecurityDeposit = value.securityDeposit;
+      settings.franchiseToolkitPrice = value.toolkitPrice;
+      if (value.registrationFeeRefundable !== undefined) {
+        settings.franchiseRegistrationFeeRefundable = value.registrationFeeRefundable;
+      }
+      if (value.securityDepositRefundable !== undefined) {
+        settings.franchiseSecurityDepositRefundable = value.securityDepositRefundable;
+      }
+      if (value.toolkitPriceRefundable !== undefined) {
+        settings.franchiseToolkitPriceRefundable = value.toolkitPriceRefundable;
+      }
     }
     
     await settings.save();
 
     res.json({
       success: true,
-      message: 'Fees updated successfully',
+      message: `${partnerType === 'individual' ? 'Individual' : 'Franchise'} partner fees updated successfully`,
       data: {
-        registrationFee: settings.registrationFee,
-        securityDeposit: settings.securityDeposit,
-        toolkitPrice: settings.toolkitPrice,
-        registrationFeeRefundable: settings.registrationFeeRefundable,
-        securityDepositRefundable: settings.securityDepositRefundable,
-        toolkitPriceRefundable: settings.toolkitPriceRefundable
+        partnerType,
+        registrationFee: value.registrationFee,
+        securityDeposit: value.securityDeposit,
+        toolkitPrice: value.toolkitPrice,
+        registrationFeeRefundable: value.registrationFeeRefundable,
+        securityDepositRefundable: value.securityDepositRefundable,
+        toolkitPriceRefundable: value.toolkitPriceRefundable
       }
     });
   } catch (error) {

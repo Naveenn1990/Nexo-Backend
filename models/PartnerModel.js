@@ -78,13 +78,18 @@ const partnerSchema = new mongoose.Schema(
     whatsappNumber: String,
     qualification: String,
     experience: String,
+    partnerType: {
+      type: String,
+      enum: ["individual", "franchise"],
+      default: "individual",
+    },
     modeOfService: {
       type: String,
       enum: ["online", "offline", "both"],
       required: function () {
         return this.profileCompleted;
       },
-      default: "offline",
+      default: "online",
     },
     profileCompleted: {
       type: Boolean,
@@ -136,6 +141,10 @@ const partnerSchema = new mongoose.Schema(
       payId:{
         type:String
       },
+      txnId:{
+       type:String
+      },
+
       paidBy:{
         type:String,
         default:"Self"
@@ -144,6 +153,26 @@ const partnerSchema = new mongoose.Schema(
       registerdFee:{
         type:Boolean,
         default:false  
+      },
+      securityDeposit:{
+        type:Number,
+        default:0
+      },
+      toolkitPrice:{
+        type:Number,
+        default:0
+      },
+      paymentApproved:{
+        type:Boolean,
+        default:false
+      },
+      approvedBy:{
+        type:String,
+        default:"Admin"
+      },
+      approvedAt:{
+        type:Date,
+        default:null
       },
       city: {
         type: String,
@@ -264,7 +293,14 @@ const partnerSchema = new mongoose.Schema(
             enum: ['pending', 'eligible', 'processed', 'expired'],
             default: 'pending'
           },
-          refundNotes: String
+          refundNotes: String,
+          paymentMethod: {
+            type: String,
+            enum: ['cash', 'online', 'upi', 'whatsapp'],
+            default: 'whatsapp'
+          },
+          collectedBy: String,
+          transactionId: String
         }
       ],
       default: []
@@ -334,6 +370,76 @@ const partnerSchema = new mongoose.Schema(
       acceptedAt: {
         type: Date,
         default: null
+      }
+    },
+
+    // Partner approval status
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending'
+    },
+    approvedAt: {
+      type: Date,
+      default: null
+    },
+    rejectedAt: {
+      type: Date,
+      default: null
+    },
+    rejectionReason: {
+      type: String,
+      default: null
+    },
+
+    // Onboarding progress tracking
+    onboardingProgress: {
+      step1: { // Phone verification
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step2: { // Personal information
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step3: { // KYC documents
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step4: { // Category selection
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step5: { // Service hubs
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step6: { // Terms & conditions
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step7: { // Payment options
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step8: { // Payment confirmation
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
+      },
+      step9: { // Profile review & approval
+        completed: { type: Boolean, default: false },
+        approved: { type: Boolean, default: false },
+        approvedAt: { type: Date, default: null },
+        updatedAt: { type: Date, default: null }
+      },
+      step10: { // MG plan selection
+        completed: { type: Boolean, default: false },
+        selectedPlan: { type: String, default: null },
+        completedAt: { type: Date, default: null }
+      },
+      step11: { // Success & completion
+        completed: { type: Boolean, default: false },
+        completedAt: { type: Date, default: null }
       }
     },
   },

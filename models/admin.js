@@ -29,9 +29,13 @@ const adminSchema = new mongoose.Schema(
     fcmToken: { type: String },
     notifications: [{
       message: { type: String, required: true },
+      title: { type: String }, // Add title field for consistency
       booking: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },
       seen: { type: Boolean, default: false },
-      date: { type: Date, default: Date.now }
+      read: { type: Boolean, default: false }, // Add read field for consistency with frontend
+      date: { type: Date, default: Date.now },
+      createdAt: { type: Date, default: Date.now }, // Add createdAt for consistency
+      type: { type: String, enum: ['info', 'alert', 'message', 'job'], default: 'info' }
     }], 
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

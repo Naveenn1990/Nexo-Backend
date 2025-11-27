@@ -29,9 +29,18 @@ exports.sendLoginOTP = async (req, res) => {
     let partner = await Partner.findOne({ phone });
     if (!partner) {
       // If partner does not exist, create a new partner record.
+      console.log('Creating new partner for phone:', phone);
       partner = new Partner({ phone });
-      await partner.save();
-      // console.log("New partner created for phone:", phone);
+      try {
+        await partner.save();
+        console.log('Partner created successfully with ID:', partner._id);
+      } catch (saveError) {
+        console.error('Error saving partner:', saveError);
+        return res.status(500).json({
+          success: false,
+          message: "Error creating partner account",
+        });
+      }
     }
 
     // Generate OTP
@@ -39,19 +48,32 @@ exports.sendLoginOTP = async (req, res) => {
     const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
 
     // Save OTP and expiry
-    partner = await Partner.findOneAndUpdate(
-      { phone },
-      {
-        $set: {
-          tempOTP: otp,
-          otpExpiry: otpExpiry,
-        },
-      },
-      { new: true }
-    );
+    console.log('Saving OTP for phone:', phone, 'OTP:', otp);
+    try {
+      // Find the partner and update directly
+      partner = await Partner.findOne({ phone });
+      if (partner) {
+        partner.tempOTP = otp;
+        partner.otpExpiry = otpExpiry;
+        await partner.save();
+        console.log('OTP saved successfully, partner ID:', partner._id);
+      } else {
+        console.error('Partner not found for OTP save');
+        return res.status(404).json({
+          success: false,
+          message: "Partner not found",
+        });
+      }
+    } catch (updateError) {
+      console.error('Error saving OTP:', updateError);
+      return res.status(500).json({
+        success: false,
+        message: "Error saving OTP",
+      });
+    }
 
     // Send OTP via SMS
-    // await sendOTP(phone, otp);
+    await sendOTP(phone, otp);
 
     // Debug log
     // console.log("Generated OTP:", { phone, otp, expiry: otpExpiry });
@@ -75,23 +97,46 @@ exports.sendLoginOTP = async (req, res) => {
 exports.updateTokenFmc = async (req, res) => {
   try {
     let { token } = req.body;
-    // console.log("Partner ID:", req.partner._id);
-    let data = await Partner.findById(req.partner._id);
-    if (!data) return res.status(200).json({ error: "Data not found" });
+    const partnerId = req.partner._id;
+    
+    let data = await Partner.findById(partnerId);
+    if (!data) {
+      return res.status(200).json({ error: "Data not found" });
+    }
+    
     data.fcmtoken = token;
-    await data.save()
+    await data.save();
+    
     return res.status(200).json({ success: "Successfully updated" });
 
   } catch (error) {
-    console.log(error);
-
+    console.error('Error updating FCM token:', error);
+    return res.status(500).json({ error: "Failed to update token" });
   }
 }
 
 exports.completePaymentVendor = async (req, res) => {
   try {
     let { id, registerAmount, payId, paidBy, terms, securityDeposit, toolkitPrice } = req.body;
-    let data = await Partner.findById(id || req.partner._id);
+
+    // Debug logging
+    console.log('completePaymentVendor called:', {
+      bodyId: id,
+      authPartnerId: req.partner?._id,
+      registerAmount,
+      payId,
+      paidBy
+    });
+
+    // Use authenticated partner ID for security, fallback to body ID if needed
+    const partnerId = req.partner?._id || id;
+    if (!partnerId) {
+      return res.status(400).json({ error: "Partner ID not found" });
+    }
+
+    let data = await Partner.findById(partnerId);
+    console.log('Partner found:', !!data, 'Partner ID:', data?._id);
+
     if (!data) return res.status(200).json({ error: "Data not found" });
     
     // Fetch current fees from PricingSettings to validate and use dynamic fees
@@ -137,14 +182,14 @@ exports.completePaymentVendor = async (req, res) => {
       console.warn(`Toolkit price mismatch: provided ${finalToolkitPrice}, expected ${currentToolkitPrice}`);
     }
     
-    const partnerId = data._id.toString();
+    const partnerIdString = data._id.toString();
     const totalAmount = finalRegistrationFee + finalSecurityDeposit + finalToolkitPrice;
     
     // Get partner name from profile or use phone as fallback
     const partnerName = data.profile?.name || data.name || data.phone || 'Unknown Partner';
     
     // Create a payment group ID to link related transactions
-    const paymentGroupId = `PAY-${partnerId}-${Date.now()}`;
+    const paymentGroupId = `PAY-${partnerIdString}-${Date.now()}`;
     
     // Verify and get PhonePe transaction details if payId is provided
     let phonePeTransaction = null;
@@ -183,12 +228,37 @@ exports.completePaymentVendor = async (req, res) => {
       }
     }
     
-    // Generate unique transaction IDs for each fee type
+    // Check if transactions already exist for this partner
+    const existingTransactions = await PaymentTransaction.find({ partnerId: partnerId });
+    const hasExistingTransactions = existingTransactions.length > 0;
+
+    // If transactions exist, just update the payId instead of creating new ones
+    if (hasExistingTransactions && payId) {
+      try {
+        // Update all existing transactions with the payId
+        await PaymentTransaction.updateMany(
+          { partnerId: partnerId, phonepeTransactionId: null },
+          {
+            $set: {
+              phonepeTransactionId: payId,
+              status: paymentStatus,
+              'metadata.phonePeMerchantTransactionId': payId,
+              'metadata.phonePeStatus': phonePeTransaction?.status || null
+            }
+          }
+        );
+        console.log('Updated existing transactions with payId:', payId);
+      } catch (updateError) {
+        console.error('Error updating existing transactions:', updateError);
+      }
+    }
+
+    // Generate unique transaction IDs for each fee type (only if no existing transactions)
     const timestamp = Date.now();
-    const uniqueId = phonePeTransactionId || payId || partnerId;
-    
-    // Record registration fee transaction (separate transaction)
-    if (finalRegistrationFee && finalRegistrationFee > 0) {
+    const uniqueId = phonePeTransactionId || payId || partnerIdString;
+
+    // Record registration fee transaction (separate transaction) - only if no existing transactions
+    if (finalRegistrationFee && finalRegistrationFee > 0 && !hasExistingTransactions) {
       try {
         await PaymentTransaction.create({
           partnerId: partnerId,
@@ -226,8 +296,8 @@ exports.completePaymentVendor = async (req, res) => {
       }
     }
     
-    // Record security deposit transaction (separate transaction)
-    if (finalSecurityDeposit && finalSecurityDeposit > 0) {
+    // Record security deposit transaction (separate transaction) - only if no existing transactions
+    if (finalSecurityDeposit && finalSecurityDeposit > 0 && !hasExistingTransactions) {
       try {
         await PaymentTransaction.create({
           partnerId: partnerId,
@@ -265,8 +335,8 @@ exports.completePaymentVendor = async (req, res) => {
       }
     }
     
-    // Record toolkit transaction (separate transaction)
-    if (finalToolkitPrice && finalToolkitPrice > 0) {
+    // Record toolkit transaction (separate transaction) - only if no existing transactions
+    if (finalToolkitPrice && finalToolkitPrice > 0 && !hasExistingTransactions) {
       try {
         await PaymentTransaction.create({
           partnerId: partnerId,
@@ -304,16 +374,27 @@ exports.completePaymentVendor = async (req, res) => {
       }
     }
     
-    if (finalRegistrationFee) {
-      data.profile.registerAmount = finalRegistrationFee;
-      data.profile.registerdFee = true;
-    }
-    if (payId) {
-      data.profile.payId = payId;
-    }
-    if (paidBy) {
-      data.profile.paidBy = paidBy
-    }
+    console.log('Saving payment data:', {
+      partnerId: data._id,
+      finalRegistrationFee,
+      payId,
+      paidBy,
+      securityDeposit,
+      toolkitPrice
+    });
+
+    // Save payment data
+    data.registerAmount = finalRegistrationFee || 0;
+    data.payId = payId || null;
+    data.paidBy = paidBy || null;
+    data.registerdFee = true;
+
+    console.log('Payment data saved to partner:', {
+      registerAmount: data.registerAmount,
+      payId: data.payId,
+      paidBy: data.paidBy,
+      registerdFee: data.registerdFee
+    });
     // Save terms data if provided
     if (terms) {
       data.terms = {
@@ -343,6 +424,27 @@ exports.completePaymentVendor = async (req, res) => {
     }
     
     data = await data.save();
+
+    // Notify all admins about new partner registration/payment
+    if (data.profile.registerdFee) {
+      const { sendAllAdminsNotification, sendPartnerNotification } = require("../services/notificationService");
+      await sendAllAdminsNotification(
+        'New Partner Registration',
+        `Partner ${data.profile?.name || data.phone} has completed registration and payment. Amount: ₹${totalAmount || data.profile.registerAmount || 0}. Please review their KYC.`,
+        'info',
+        '/android-chrome-192x192.png'
+      );
+
+      // Notify partner
+      await sendPartnerNotification(
+        data._id,
+        'Registration Complete',
+        `Your registration is complete! Payment of ₹${totalAmount || data.profile.registerAmount || 0} received. Your profile is under review.`,
+        'success',
+        '/android-chrome-192x192.png'
+      );
+    }
+
     return res.status(200).json({ 
       success: true,
       message: "Successfully completed transaction",
@@ -491,7 +593,7 @@ exports.resendOTP = async (req, res) => {
     );
 
     // Send OTP via SMS
-    // await sendOTP(phone, otp);
+    await sendOTP(phone, otp);
 
     res.json({
       success: true,
@@ -541,6 +643,7 @@ exports.completeProfile = async (req, res) => {
       referralCode,
       city,
       gstNumber,
+      partnerType,
     } = req.body;
 
     if (!name || !email) {
@@ -561,6 +664,7 @@ exports.completeProfile = async (req, res) => {
           whatsappNumber,
           qualification,
           experience,
+          partnerType: partnerType || 'individual',
           profilePicture: profilePicturePath, // ✅ Save only the filename
         },
       },
@@ -1178,13 +1282,15 @@ exports.getProfile = async (req, res) => {
         whatsappNumber: profile.whatsappNumber,
         qualification: profile.qualification,
         experience: profile.experience,
+        partnerType: profile.partnerType || "individual",
         subcategory: profile.subcategory,
         category: profile.category,
         categoryNames: profile.categoryNames || [],
         service: profile.service,
         modeOfService: profile?.modeOfService || "offline",
         profilePicture: profile.profilePicture,
-        status: profile.profileCompleted ? "Completed" : "Incomplete",
+        status: profile.status || (profile.profileCompleted ? "approved" : "pending"), // Partner approval status
+        profileCompleted: profile.profileCompleted,
         drive: profile.drive,
         tempoTraveller: profile.tempoTraveller,
         referralCode: profile.referralCode,
@@ -1194,6 +1300,15 @@ exports.getProfile = async (req, res) => {
         landmark: profile.profile?.landmark,
         pincode: profile.profile?.pincode,
         gstNumber: profile.profile?.gstNumber,
+        // Include payment and approval status fields
+        paymentApproved: profile?.profile?.paymentApproved,
+        registerdFee: profile?.profile?.registerdFee,
+        payId: profile?.profile?.payId || "N/A",  
+        paidBy: profile?.profile?.paidBy,
+        registerAmount: profile?.profile?.registerAmount || 0,
+        approvedAt: profile?.approvedAt || profile?.profile?.approvedAt || null,
+        approvedBy: profile?.profile?.approvedBy || "Admin",
+        isApproved: profile.status === 'approved',
         // Include KYC documents if they exist
         kyc: profile.kyc ? {
           panCard: profile.kyc.panCard || null,
@@ -1259,6 +1374,7 @@ exports.updateProfile = async (req, res) => {
       pincode,
       referralCode,
       gstNumber,
+      partnerType,
       categories,
       categoryNames,
       terms,
@@ -1293,6 +1409,7 @@ exports.updateProfile = async (req, res) => {
     if (contactNumber) profile.contactNumber = contactNumber;
     if (qualification) profile.qualification = qualification;
     if (experience) profile.experience = (experience);
+    if (partnerType) profile.partnerType = partnerType;
     if (category) profile.category = category;
     if (subcategory) {
       // Handle both array and single value
@@ -1891,11 +2008,28 @@ exports.addtransactionwalletadmin = async (req, res) => {
           balance: amount,
         }], balance: Number(amount)
       });
-      await NotificationModel.create({
-        title: description,
-        userId: partner,
-        message: `Your wallet has been ${type}ed with amount ${amount}. Your new balance is ${data.balance}.`,
-      })
+      // Send notification using notification service
+      const { sendPartnerNotification, sendAdminNotification } = require("../services/notificationService");
+      const transactionType = type === 'credit' ? 'credited' : 'debited';
+      await sendPartnerNotification(
+        partner,
+        type === 'credit' ? 'Wallet Credited' : 'Wallet Debited',
+        `Your wallet has been ${transactionType} with ₹${amount}. ${description}. Your new balance is ₹${data.balance}.`,
+        type === 'credit' ? 'success' : 'alert',
+        '/android-chrome-192x192.png'
+      );
+
+      // Notify admin who made the transaction
+      if (req.admin) {
+        const partnerData = await Partner.findById(partner);
+        await sendAdminNotification(
+          req.admin._id,
+          'Wallet Transaction',
+          `Wallet ${type} of ₹${amount} for partner ${partnerData?.profile?.name || partnerData?.phone || 'Unknown'}. ${description}`,
+          'info',
+          '/android-chrome-192x192.png'
+        );
+      }
 
       return res
         .status(200)
@@ -1917,11 +2051,40 @@ exports.addtransactionwalletadmin = async (req, res) => {
     });
     data = await data.save();
 
-    await NotificationModel.create({
-      title: description,
-      userId: partner,
-      message: `Your wallet has been ${type}ed with amount ${amount}. Your new balance is ${data.balance}.`,
-    })
+    // Send notification using notification service
+    console.log(`💰 Wallet transaction completed: ${type} ₹${amount} for partner ${partner}`);
+    const { sendPartnerNotification, sendAdminNotification } = require("../services/notificationService");
+    const transactionType = type === 'credit' ? 'credited' : 'debited';
+    
+    try {
+      await sendPartnerNotification(
+        partner,
+        type === 'credit' ? 'Wallet Credited' : 'Wallet Debited',
+        `Your wallet has been ${transactionType} with ₹${amount}. ${description}. Your new balance is ₹${data.balance}.`,
+        type === 'credit' ? 'success' : 'alert',
+        '/android-chrome-192x192.png'
+      );
+      console.log(`✅ Partner notification sent for wallet transaction`);
+    } catch (notifError) {
+      console.error(`❌ Error sending partner notification:`, notifError);
+    }
+
+    // Notify admin who made the transaction
+    if (req.admin) {
+      try {
+        const partnerData = await Partner.findById(partner);
+        await sendAdminNotification(
+          req.admin._id,
+          'Wallet Transaction',
+          `Wallet ${type} of ₹${amount} for partner ${partnerData?.profile?.name || partnerData?.phone || 'Unknown'}. ${description}`,
+          'info',
+          '/android-chrome-192x192.png'
+        );
+        console.log(`✅ Admin notification sent for wallet transaction`);
+      } catch (notifError) {
+        console.error(`❌ Error sending admin notification:`, notifError);
+      }
+    }
 
     return res
       .status(200)
@@ -2019,4 +2182,83 @@ exports.verifyPartner = async (req, res) => {
       error: error.message,
     });
   }
-}
+};
+
+exports.updateOnboardingStep = async (req, res) => {
+  try {
+    console.log("ppoppppp",req.body); 
+
+    if (!req.partner || !req.partner._id) {
+      return res.status(400).json({
+        success: false,
+        message: "Partner ID is missing",
+      });
+    }
+
+    const partnerId = new mongoose.Types.ObjectId(req.partner._id);
+    const { step, completed, approved, approvedAt, registerAmount, payId, paidBy, securityDeposit,toolkitPrice } = req.body;
+
+    // Update the partner's onboarding step progress
+    const updateData = {
+      [`onboardingProgress.step${step}`]: {
+        completed: completed || false,
+        approved: approved || false,
+        approvedAt: approvedAt || null,
+        updatedAt: new Date(),
+        completedAt:new Date()
+      }
+    };
+
+    // Also update overall approval status if approved
+    if (approved) {
+      updateData.status = 'approved';
+      updateData.approvedAt = approvedAt || new Date();
+    }
+    if(registerAmount){
+      updateData['profile.registerAmount'] = registerAmount;
+    }
+    if(payId){
+      updateData['profile.payId'] = payId;
+    }
+    if(paidBy){
+      updateData['profile.paidBy'] = paidBy;
+    }
+    if(securityDeposit){
+      updateData['profile.securityDeposit'] = securityDeposit;
+    }
+    if(toolkitPrice){
+      updateData['profile.toolkitPrice'] = toolkitPrice;
+    }
+
+
+
+    const updatedPartner = await Partner.findByIdAndUpdate(
+      partnerId,
+      updateData,
+      { new: true }
+    );
+
+    if (!updatedPartner) {
+      return res.status(404).json({
+        success: false,
+        message: "Partner not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Onboarding step updated successfully",
+      step: step,
+      completed: completed,
+      approved: approved
+    });
+
+  } catch (error) {
+    console.error("Error updating onboarding step:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating onboarding step",
+      error: error.message
+    });
+  }
+};

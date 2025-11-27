@@ -32,7 +32,7 @@ exports.sendOTP = async (req, res) => {
     );
 
     // Send OTP via SMS
-    // await sendOTP(phone, otp);
+    await sendOTP(phone, otp);
 
     res.status(200).json({
       success: true,
@@ -227,7 +227,7 @@ exports.resendOTP = async (req, res) => {
     await user.save();
 
     // Send OTP via SMS
-    // await sendOTP(phone, otp);
+    await sendOTP(phone, otp);
 
     res.status(200).json({
       success: true,
@@ -279,7 +279,7 @@ exports.requestPasswordResetOTP = async (req, res) => {
     await user.save();
 
     // Send OTP via SMS
-    // await sendOTP(phone, otp);
+    await sendOTP(phone, otp);
 
     res.status(200).json({
       success: true,

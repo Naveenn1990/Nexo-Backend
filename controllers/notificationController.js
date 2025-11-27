@@ -39,8 +39,27 @@ const getNotifications = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const sortedNotifications = user.notifications.sort(
-      (a, b) => b.date - a.date
+    // Format notifications to include title if not present
+    const formattedNotifications = user.notifications.map(notif => {
+      // If message contains title (format: "Title: Message"), split it
+      if (notif.message && notif.message.includes(': ')) {
+        const parts = notif.message.split(': ');
+        return {
+          ...notif.toObject ? notif.toObject() : notif,
+          title: parts[0],
+          message: parts.slice(1).join(': ')
+        };
+      }
+      // Otherwise, use message as title if no title exists
+      return {
+        ...notif.toObject ? notif.toObject() : notif,
+        title: notif.title || notif.message || 'Notification',
+        message: notif.title ? notif.message : ''
+      };
+    });
+
+    const sortedNotifications = formattedNotifications.sort(
+      (a, b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt)
     );
 
     res.status(200).json({ success: true, notifications: sortedNotifications });
@@ -56,19 +75,29 @@ const markNotificationsAsRead = async (req, res) => {
     const isAdmin = req.user.role === 'admin';
 
     if (isAdmin) {
-      await Admin.findByIdAndUpdate(userId, {
-        $set: { 'notifications.$[].seen': true }
-      });
+      const admin = await Admin.findById(userId);
+      if (admin && admin.notifications) {
+        admin.notifications.forEach(notification => {
+          notification.seen = true;
+          notification.read = true;
+        });
+        await admin.save();
+      }
     } else {
-      await User.findByIdAndUpdate(userId, {
-        $set: { 'notifications.$[].seen': true }
-      });
+      const user = await User.findById(userId);
+      if (user && user.notifications) {
+        user.notifications.forEach(notification => {
+          notification.seen = true;
+          notification.read = true;
+        });
+        await user.save();
+      }
     }
 
     res.status(200).json({ success: true, message: 'Notifications marked as read' });
   } catch (error) {
     console.error('Error marking notifications as read:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
@@ -79,21 +108,39 @@ const markNotificationAsRead = async (req, res) => {
     const isAdmin = req.user.role === 'admin';
 
     if (isAdmin) {
-      await Admin.findOneAndUpdate(
-        { _id: userId, 'notifications._id': notificationId },
-        { $set: { 'notifications.$.seen': true } }
-      );
+      const admin = await Admin.findById(userId);
+      if (admin && admin.notifications) {
+        const notification = admin.notifications.id(notificationId);
+        if (notification) {
+          notification.seen = true;
+          notification.read = true;
+          await admin.save();
+        } else {
+          return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
+      } else {
+        return res.status(404).json({ success: false, message: 'Admin or notifications not found' });
+      }
     } else {
-      await User.findOneAndUpdate(
-        { _id: userId, 'notifications._id': notificationId },
-        { $set: { 'notifications.$.seen': true } }
-      );
+      const user = await User.findById(userId);
+      if (user && user.notifications) {
+        const notification = user.notifications.id(notificationId);
+        if (notification) {
+          notification.seen = true;
+          notification.read = true;
+          await user.save();
+        } else {
+          return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
+      } else {
+        return res.status(404).json({ success: false, message: 'User or notifications not found' });
+      }
     }
 
     res.status(200).json({ success: true, message: 'Notification marked as read' });
   } catch (error) {
     console.error('Error marking notification as read:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
@@ -109,28 +156,82 @@ const sendTestNotification = async (req, res) => {
       user = await User.findById(userId);
     }
 
-    if (!user || !user.fcmToken) {
+    if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found or has no FCM token'
+        message: 'User not found'
       });
     }
 
+    if (!user.fcmToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'User has no FCM token. Please ensure notifications are enabled and the user is logged in.',
+        userId: userId,
+        isAdmin: isAdmin
+      });
+    }
+
+    const iconUrl = 'https://nexo.works/android-chrome-192x192.png';
     const message = {
       notification: {
         title: 'Test Notification',
-        body: 'This is a test notification from the server'
+        body: 'This is a test notification from the server',
+        icon: iconUrl
       },
       data: {
         type: 'test_notification',
-        senderId: senderId.toString()
+        senderId: senderId.toString(),
+        title: 'Test Notification',
+        message: 'This is a test notification from the server',
+        icon: iconUrl,
+        timestamp: new Date().toISOString()
       },
-      token: user.fcmToken
+      token: user.fcmToken,
+      webpush: {
+        notification: {
+          icon: iconUrl,
+          badge: iconUrl,
+          sound: 'default', // Play default notification sound
+          requireInteraction: false,
+          silent: false // Ensure sound plays
+        },
+        fcmOptions: {
+          link: '/'
+        }
+      },
+      android: {
+        priority: 'high',
+        ttl: 86400
+      },
+      apns: {
+        payload: {
+          aps: {
+            contentAvailable: true,
+            sound: 'default'
+          }
+        },
+        headers: {
+          'apns-priority': '10'
+        }
+      }
     };
 
-    await admin.messaging().send(message);
-
-    res.status(200).json({ success: true, message: 'Test notification sent' });
+    try {
+      const result = await admin.messaging().send(message);
+      res.status(200).json({ 
+        success: true, 
+        message: 'Test notification sent',
+        messageId: result
+      });
+    } catch (fcmError) {
+      console.error('FCM send error:', fcmError);
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send FCM notification',
+        error: fcmError.message 
+      });
+    }
   } catch (error) {
     console.error('Error sending test notification:', error);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -170,8 +271,6 @@ const initiateCall = async (req, res) => {
     };
 
     await admin.messaging().send(message);
-    console.log('Notification sent to receiver:', receiverId);
-
     res.json({ success: true });
   } catch (error) {
     console.error('Error initiating call:', error);
@@ -212,8 +311,6 @@ const AnswerCall=async(req,res)=>{
     };
 
     await admin.messaging().send(message);
-    console.log('Answer sent to caller:', receiverId);
-
     res.json({ success: true });
   } catch (error) {
     console.error('Error sending answer:', error);
@@ -250,8 +347,6 @@ const sendIceCandidate=async(req,res)=>{
     };
 
     await admin.messaging().send(message);
-    console.log('ICE candidate sent to:', receiverId);
-
     res.json({ success: true });
   } catch (error) {
     console.error('Error sending ICE candidate:', error);
@@ -291,7 +386,6 @@ const endCall = async (req, res) => {
     };
 
     await admin.messaging().send(message);
-    console.log('Call ended notification sent to:', receiverId);
 
     // Clean up
     calls.delete(callId);

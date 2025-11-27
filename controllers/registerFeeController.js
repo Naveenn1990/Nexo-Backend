@@ -25,12 +25,17 @@ const featureValidationSchema = Joi.object({
 const getPricingSettings = async (req, res) => {
   try {
     let settings = await PricingSettings.findOne();
-    
+
     if (!settings) {
       // Create default settings if none exist
       settings = new PricingSettings({
         registrationFee: 500,
         securityDeposit: 1000,
+        securityDepositOptions: [
+          { amount: 500, label: "Basic Plan", description: "₹500 security deposit for basic services", default: false },
+          { amount: 1000, label: "Standard Plan", description: "₹1000 security deposit for standard services", default: true },
+          { amount: 2000, label: "Premium Plan", description: "₹2000 security deposit for premium services", default: false }
+        ],
         toolkitPrice: 2499,
         originalPrice: 3000,
         specialOfferActive: true,
@@ -47,10 +52,21 @@ const getPricingSettings = async (req, res) => {
 
     // Ensure refundable fields are always included and properly typed
     const settingsObj = settings.toObject();
+
+    // Force security deposit options to be included
+    const defaultSecurityDepositOptions = [
+      { amount: 500, label: "Basic Plan", description: "₹500 security deposit for basic services", default: false },
+      { amount: 1000, label: "Standard Plan", description: "₹1000 security deposit for standard services", default: true },
+      { amount: 2000, label: "Premium Plan", description: "₹2000 security deposit for premium services", default: false }
+    ];
+
     const responseData = {
       ...settingsObj,
       registrationFee: settingsObj.registrationFee || 500,
       securityDeposit: settingsObj.securityDeposit || 1000,
+      securityDepositOptions: settingsObj.securityDepositOptions && settingsObj.securityDepositOptions.length > 0
+        ? settingsObj.securityDepositOptions
+        : defaultSecurityDepositOptions,
       toolkitPrice: settingsObj.toolkitPrice || 2499,
       registrationFeeRefundable: settingsObj.registrationFeeRefundable !== undefined ? Boolean(settingsObj.registrationFeeRefundable) : false,
       securityDepositRefundable: settingsObj.securityDepositRefundable !== undefined ? Boolean(settingsObj.securityDepositRefundable) : false,

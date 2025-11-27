@@ -16,6 +16,7 @@ const { uploadFile2 } = require("../middleware/aws");
 const Notification = require("../models/Notification");
 const dayjs = require("dayjs");
 const { PaymentTransaction } = require("../models/RegisterFee");
+const { sendPartnerNotification, sendAdminNotification } = require("../services/notificationService");
 
 
 
@@ -719,6 +720,26 @@ exports.verifyPartnerKYC = async (req, res) => {
     partner.kyc.status = 'approved'
     await partner.save()
 
+    // Send notification to partner
+    await sendPartnerNotification(
+      partnerId,
+      'KYC Approved',
+      `Your KYC verification has been approved. You can now start accepting bookings.`,
+      'success',
+      '/android-chrome-192x192.png'
+    );
+
+    // Notify admin who verified
+    if (req.admin) {
+      await sendAdminNotification(
+        req.admin._id,
+        'KYC Verified',
+        `Partner ${partner.profile?.name || partner.phone} KYC has been verified.`,
+        'info',
+        '/android-chrome-192x192.png'
+      );
+    }
+
     res.json({ success: true, message: "Partner found", partner });
   } catch (error) {
     console.error("Error:", error);
@@ -849,6 +870,7 @@ exports.getAllPartners = async (req, res) => {
             pincode: partner.profile?.pincode || "N/A",
             experience: partner.experience || "N/A",
             qualification: partner.qualification || "N/A",
+            partnerType: partner.partnerType || "individual",
             modeOfService: partner.modeOfService || "N/A",
             profileCompleted: partner.profileCompleted,
             agentName: partner.agentName,
@@ -856,8 +878,7 @@ exports.getAllPartners = async (req, res) => {
             createdAt: partner.createdAt,
             updatedAt: partner.updatedAt,
             KYC: {
-              status: partner?.kyc?.status,
-              // status: partner?.kyc?.status || "Pending",
+              status: partner?.kyc?.status || partner?.status || "pending",
               panCard: partner.kyc?.panCard ? `/uploads/kyc/${partner.kyc?.panCard}` : "Not Uploaded",
               aadhaar: partner.kyc?.aadhaar ? `/uploads/kyc/${partner.kyc?.aadhaar}` : "Not Uploaded",
               drivingLicence: partner.kyc?.drivingLicence ? `/uploads/kyc/${partner.kyc?.drivingLicence}` : "Not Uploaded",
@@ -873,9 +894,9 @@ exports.getAllPartners = async (req, res) => {
             totalEarnings,
             transactions,
           },
-          registerAmount: partner.profile?.registerAmount || 0,
-          payId: partner.profile?.payId || "N/A",
-          paidBy: partner.profile?.paidBy || "N/A",
+          registerAmount: partner.registerAmount || 0,
+          payId: partner.payId || "N/A",
+          paidBy: partner.paidBy || "N/A",
           mgPlan: partner.mgPlan || null,
           mgPlanLeadQuota: partner.mgPlanLeadQuota || 0,
           mgPlanLeadsUsed: partner.mgPlanLeadsUsed || 0,
@@ -1014,7 +1035,17 @@ exports.getPartnerDetails = async (req, res) => {
       partnerId: partnerData._id,
       categoryCount: partnerData.category?.length || 0,
       categoryNamesCount: partnerData.categoryNames?.length || 0,
-      categoryNames: partnerData.categoryNames
+      categoryNames: partnerData.categoryNames,
+      paymentData: {
+        registerAmount: partnerData?.profile?.registerAmount || 0,
+        payId: partnerData?.profile?.payId || "N/A",
+        paidBy: partnerData?.profile?.paidBy || "N/A",
+        registerdFee: partnerData?.profile?.registerdFee || false,
+        paymentApproved: partnerData?.profile?.paymentApproved || false,
+        securityDeposit: partnerData?.profile?.securityDeposit || 0,
+        toolkitPrice: partnerData?.profile?.toolkitPrice || 0
+      },
+      // partnerData
     });
     
     res.json({ partner: partnerData, totalEarnings, transactions });
@@ -1123,6 +1154,41 @@ exports.updatePartnerStatus = async (req, res) => {
       },
       { new: true, runValidators: true }
     );
+
+    // Send notification to partner based on status
+    let notificationTitle, notificationMessage, notificationType;
+    if (status === 'approved') {
+      notificationTitle = 'KYC Approved';
+      notificationMessage = `Your KYC verification has been approved. You can now start accepting bookings.${remarks ? ` Remarks: ${remarks}` : ''}`;
+      notificationType = 'success';
+    } else if (status === 'rejected') {
+      notificationTitle = 'KYC Rejected';
+      notificationMessage = `Your KYC verification has been rejected.${remarks ? ` Reason: ${remarks}` : ' Please contact support for more information.'}`;
+      notificationType = 'alert';
+    } else {
+      notificationTitle = 'KYC Status Updated';
+      notificationMessage = `Your KYC status has been updated to ${status}.${remarks ? ` Remarks: ${remarks}` : ''}`;
+      notificationType = 'info';
+    }
+
+    await sendPartnerNotification(
+      partnerId,
+      notificationTitle,
+      notificationMessage,
+      notificationType,
+      '/android-chrome-192x192.png'
+    );
+
+    // Notify admin who updated
+    if (req.admin) {
+      await sendAdminNotification(
+        req.admin._id,
+        'KYC Status Updated',
+        `Partner ${updatedPartner.profile?.name || updatedPartner.phone} KYC status changed to ${status}.`,
+        'info',
+        '/android-chrome-192x192.png'
+      );
+    }
 
     res.json({
       success: true,
@@ -1636,14 +1702,28 @@ exports.assignedbooking = async (req, res) => {
       return res.status(400).json({ message: "Either partnerId or teamMemberId is required" });
     }
 
-    const notification = new Notification({
-      title: 'Booking Assigned',
-      userId: partnerId || (teamMember?.partner?._id || teamMember?.partner),
-      message: `You have been assigned a new booking ${book.subService?.name} by wave admin`,
-      createdAt: new Date(),
-      read: false,
-    });
-    await notification.save();
+    const assignedPartnerId = partnerId || (teamMember?.partner?._id || teamMember?.partner);
+    
+    // Send notification to partner
+    await sendPartnerNotification(
+      assignedPartnerId,
+      'New Booking Assigned',
+      `You have been assigned a new booking: ${book.subService?.name || 'Service'}. Booking ID: ${bookingId}`,
+      'job',
+      '/android-chrome-192x192.png'
+    );
+
+    // Notify admin
+    if (req.admin) {
+      const partner = await Partner.findById(assignedPartnerId);
+      await sendAdminNotification(
+        req.admin._id,
+        'Booking Assigned',
+        `Booking ${bookingId} has been assigned to partner ${partner?.profile?.name || partner?.phone || 'Unknown'}.`,
+        'info',
+        '/android-chrome-192x192.png'
+      );
+    }
 
     book.status = "accepted"
     await book.save();
@@ -2051,3 +2131,465 @@ exports.getAllFeeTransactions = async (req, res) => {
   }
 };
 
+// Approve Partner Payment
+exports.approvePartnerPayment = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    const { registerAmount, payId, paidBy, paymentApproved, approvedBy, approvedAt } = req.body;
+
+    // Find the partner
+    const partner = await Partner.findById(partnerId);
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Partner not found"
+      });
+    }
+
+    // Update payment information
+    if (partner.profile) {
+      if (registerAmount !== undefined) {
+        partner.profile.registerAmount = registerAmount;
+      }
+      if (payId !== undefined) {
+        partner.profile.payId = payId;
+      }
+      if (paidBy !== undefined) {
+        partner.profile.paidBy = paidBy;
+      }
+
+      // Mark payment as approved
+      partner.profile.registerdFee = true;
+
+      // Add approval metadata
+      partner.profile.paymentApproved = paymentApproved || true;
+      partner.profile.approvedBy = approvedBy || 'Admin';
+      partner.profile.approvedAt = approvedAt || new Date();
+    }
+
+    // Update profile completion status
+    const hasBasicFields = partner.profile?.name &&
+                          partner.profile?.email &&
+                          partner.qualification &&
+                          partner.experience;
+
+    if (hasBasicFields) {
+      partner.profileCompleted = true;
+    }
+
+    partner.profileStatus = 'active';
+    partner.status = 'approved';
+
+    await partner.save();
+
+    console.log("partner",partner);
+
+    // Send notification to partner about payment approval
+    const { sendPartnerNotification } = require("../services/notificationService");
+    const totalAmount = (registerAmount || partner.registerAmount || 0) +
+                       (partner.securityDeposit || 0) +
+                       (partner.toolkitPrice || 0);
+
+    await sendPartnerNotification(
+      partner._id,
+      '🎉 Payment Approved!',
+      `Congratulations! Your payment of ₹${totalAmount.toLocaleString('en-IN')} has been approved. Your partner profile is now active and you can start accepting bookings.`,
+      'success',
+      '/android-chrome-192x192.png'
+    );
+
+    res.json({
+      success: true,
+      message: "Payment approved successfully",
+      partner: {
+        id: partner._id,
+        registerAmount: partner?.profile?.registerAmount || 0,
+        payId: partner?.profile?.payId || "N/A",
+        paidBy: partner?.profile?.paidBy || "N/A" ,
+        registerdFee: partner?.profile?.registerdFee || false ,
+        paymentApproved: partner?.profile?.paymentApproved || false,
+        approvedAt: partner?.profile?.approvedAt || new Date(),
+        securityDeposit: partner?.profile?.securityDeposit || 0,
+        toolkitPrice: partner?.profile?.toolkitPrice || 0
+      }
+    });
+
+  } catch (error) {
+    console.error("Approve Partner Payment Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error approving payment",
+      error: error.message
+    });
+  }
+};
+
+
+// Update MG Plan Payment Details
+exports.updateMGPlanPaymentDetails = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    const { paymentMethod, collectedBy, transactionId } = req.body;
+
+    // Validate required fields
+    if (!paymentMethod) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment method is required"
+      });
+    }
+
+    if (paymentMethod === 'cash' && !collectedBy) {
+      return res.status(400).json({
+        success: false,
+        message: "Collected by is required for cash payments"
+      });
+    }
+
+    if ((paymentMethod === 'online' || paymentMethod === 'upi') && !transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: "Transaction ID is required for online/UPI payments"
+      });
+    }
+
+    // Find the partner
+    const partner = await Partner.findById(partnerId);
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Partner not found"
+      });
+    }
+
+    // Check if partner has an MG plan
+    if (!partner.mgPlan) {
+      return res.status(400).json({
+        success: false,
+        message: "Partner doesn't have an MG plan assigned"
+      });
+    }
+
+    // Update the latest MG plan history entry with payment details
+    if (partner.mgPlanHistory && partner.mgPlanHistory.length > 0) {
+      const latestPlanIndex = partner.mgPlanHistory.length - 1;
+      partner.mgPlanHistory[latestPlanIndex].paymentMethod = paymentMethod;
+      
+      if (paymentMethod === 'cash') {
+        partner.mgPlanHistory[latestPlanIndex].collectedBy = collectedBy;
+        partner.mgPlanHistory[latestPlanIndex].transactionId = undefined;
+      } else {
+        partner.mgPlanHistory[latestPlanIndex].transactionId = transactionId;
+        partner.mgPlanHistory[latestPlanIndex].collectedBy = undefined;
+      }
+      
+      partner.mgPlanHistory[latestPlanIndex].paymentUpdatedAt = new Date();
+    }
+
+    await partner.save();
+
+    // Send notification to partner
+    await sendPartnerNotification(
+      partner._id,
+      'Payment Details Updated',
+      `Payment details for your MG plan have been updated successfully.`,
+      'info',
+      '/android-chrome-192x192.png'
+    );
+
+    res.json({
+      success: true,
+      message: "Payment details updated successfully",
+      paymentDetails: {
+        paymentMethod,
+        ...(paymentMethod === 'cash' ? { collectedBy } : { transactionId })
+      }
+    });
+
+  } catch (error) {
+    console.error("Update MG Plan Payment Details Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating payment details",
+      error: error.message
+    });
+  }
+};
+
+// Manual Partner Registration by Admin
+exports.manualPartnerRegistration = async (req, res) => {
+  // Set JSON content type immediately
+  res.setHeader('Content-Type', 'application/json');
+  
+  try {
+    console.log('=== Manual Partner Registration Started ===');
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Files received:', req.files?.length || 0);
+    
+    const {
+      phone,
+      whatsappNumber,
+      name,
+      email,
+      qualification,
+      experience,
+      partnerType,
+      address,
+      landmark,
+      pincode,
+      city,
+      category,
+      categoryNames,
+      selectedHubs,
+      modeOfService,
+      bankDetails,
+      registerAmount,
+      securityDeposit,
+      toolkitPrice,
+      paymentApproved,
+      registerdFee,
+      paidBy,
+      agentName,
+      gstNumber,
+      referralCode,
+      profileStatus,
+      termsAccepted,
+      signature,
+      selectedPlan,
+      selectedPlanId
+    } = req.body;
+    
+    console.log('Phone:', phone);
+    console.log('Name:', name);
+    console.log('Email:', email);
+
+    // Validate required fields
+    if (!phone || !name || !email || !address || !landmark || !pincode || !city) {
+      return res.status(400).json({
+        success: false,
+        message: "Required fields are missing"
+      });
+    }
+
+    // Check if partner with phone already exists
+    const existingPartner = await Partner.findOne({ phone });
+    if (existingPartner) {
+      return res.status(400).json({
+        success: false,
+        message: "Partner with this phone number already exists"
+      });
+    }
+
+    // Generate unique referral code if not provided
+    const finalReferralCode = referralCode || `NEXO${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
+    // Parse JSON fields
+    const parsedCategory = category ? (typeof category === 'string' ? JSON.parse(category) : category) : [];
+    const parsedCategoryNames = categoryNames ? (typeof categoryNames === 'string' ? JSON.parse(categoryNames) : categoryNames) : [];
+    const parsedSelectedHubs = selectedHubs ? (typeof selectedHubs === 'string' ? JSON.parse(selectedHubs) : selectedHubs) : [];
+    const parsedBankDetails = bankDetails ? (typeof bankDetails === 'string' ? JSON.parse(bankDetails) : bankDetails) : {};
+    
+    console.log('Parsed selectedHubs:', JSON.stringify(parsedSelectedHubs, null, 2));
+    console.log('Number of hubs selected:', parsedSelectedHubs.length);
+
+    // Handle file uploads
+    const files = req.files || [];
+    console.log('Files array:', files.map(f => ({ fieldname: f.fieldname, filename: f.filename, originalname: f.originalname })));
+    
+    const kycData = {
+      status: 'approved' // Auto-approve for manual registration
+    };
+    
+    let profilePicturePath = null;
+    
+    files.forEach(file => {
+      console.log(`Processing file: ${file.fieldname} -> ${file.filename}`);
+      if (file.fieldname === 'profilePicture') {
+        profilePicturePath = file.filename;
+        console.log('Profile picture set:', profilePicturePath);
+      } else if (['panCard', 'aadhaar', 'aadhaarback', 'drivingLicence', 'bill', 'chequeImage'].includes(file.fieldname)) {
+        kycData[file.fieldname] = file.filename;
+        console.log(`KYC document ${file.fieldname} set:`, file.filename);
+      }
+    });
+    
+    console.log('Final KYC data:', kycData);
+    console.log('Profile picture path:', profilePicturePath);
+
+    // Create partner object
+    const partnerData = {
+      phone,
+      whatsappNumber: whatsappNumber || phone,
+      qualification,
+      experience,
+      partnerType: partnerType || 'individual',
+      modeOfService: modeOfService || 'both',
+      profileCompleted: true,
+      profileStatus: profileStatus || 'active',
+      profile: {
+        name,
+        email,
+        address,
+        landmark,
+        pincode,
+        city,
+        gstNumber,
+        registerAmount: registerAmount || 0,
+        securityDeposit: securityDeposit || 0,
+        toolkitPrice: toolkitPrice || 0,
+        registerdFee: registerdFee === 'true' || registerdFee === true,
+        paymentApproved: paymentApproved === 'true' || paymentApproved === true,
+        paidBy: paidBy || 'Admin',
+        approvedBy: 'Admin',
+        approvedAt: (paymentApproved === 'true' || paymentApproved === true) ? new Date() : null
+      },
+      kyc: kycData,
+      bankDetails: {
+        accountNumber: parsedBankDetails.accountNumber || '',
+        ifscCode: parsedBankDetails.ifscCode || '',
+        accountHolderName: parsedBankDetails.accountHolderName || '',
+        bankName: parsedBankDetails.bankName || ''
+      },
+      category: parsedCategory,
+      categoryNames: parsedCategoryNames,
+      serviceHubs: parsedSelectedHubs.map(hub => {
+        // Handle both formats: {hubId, name, pinCodes} or {name, pinCodes}
+        const mappedHub = {
+          name: hub.name || '',
+          pinCodes: Array.isArray(hub.pinCodes) ? hub.pinCodes : [],
+          isPrimary: hub.isPrimary || false
+        };
+        console.log('Mapping hub:', JSON.stringify(hub), '-> serviceHub:', JSON.stringify(mappedHub));
+        return mappedHub;
+      }),
+      agentName,
+      referralCode: finalReferralCode,
+      profilePicture: profilePicturePath,
+      status: 'approved', // Auto-approve for manual registration
+      approvedAt: new Date(),
+      terms: {
+        accepted: termsAccepted === 'true' || termsAccepted === true,
+        signature: signature || null,
+        acceptedAt: (termsAccepted === 'true' || termsAccepted === true) ? new Date() : null
+      },
+      // MG Plan will be set after partner creation if selected
+      onboardingProgress: {
+        step1: { completed: true, completedAt: new Date() },
+        step2: { completed: true, completedAt: new Date() },
+        step3: { completed: true, completedAt: new Date() },
+        step4: { completed: true, completedAt: new Date() },
+        step5: { completed: true, completedAt: new Date() },
+        step6: { completed: true, completedAt: new Date() },
+        step7: { completed: true, completedAt: new Date() },
+        step8: { completed: true, completedAt: new Date() },
+        step9: { completed: true, approved: true, approvedAt: new Date(), updatedAt: new Date() },
+        step10: { completed: false },
+        step11: { completed: true, completedAt: new Date() }
+      }
+    };
+
+    // Create partner
+    console.log('Creating partner with serviceHubs:', JSON.stringify(partnerData.serviceHubs, null, 2));
+    const partner = new Partner(partnerData);
+    await partner.save();
+    console.log('Partner saved. ServiceHubs in DB:', JSON.stringify(partner.serviceHubs, null, 2));
+
+    // Handle MG Plan subscription if selected
+    if (selectedPlanId) {
+      try {
+        const MGPlan = require('../models/MGPlan');
+        const plan = await MGPlan.findById(selectedPlanId);
+        
+        if (plan) {
+          const subscribedAt = new Date();
+          const expiresAt = new Date(subscribedAt);
+          const validityMonths = plan.validityMonths || 1;
+          expiresAt.setMonth(expiresAt.getMonth() + validityMonths);
+
+          partner.mgPlan = selectedPlanId;
+          partner.mgPlanLeadQuota = plan.leads || 0;
+          partner.mgPlanLeadsUsed = 0;
+          partner.mgPlanSubscribedAt = subscribedAt;
+          partner.mgPlanExpiresAt = expiresAt;
+          partner.leadAcceptancePaused = false;
+
+          // Add to MG plan history
+          partner.mgPlanHistory.push({
+            plan: plan._id,
+            planName: plan.name,
+            price: plan.price,
+            leadsGuaranteed: plan.leads,
+            commissionRate: plan.commission,
+            leadFee: plan.leadFee,
+            subscribedAt: subscribedAt,
+            expiresAt: expiresAt,
+            leadsConsumed: 0,
+            refundStatus: 'pending'
+          });
+
+          await partner.save();
+          console.log('MG Plan assigned successfully:', plan.name);
+        }
+      } catch (planError) {
+        console.error('Error assigning MG plan:', planError);
+        // Don't fail the registration if MG plan assignment fails
+      }
+    }
+
+    // Send notification to partner (if FCM token available)
+    try {
+      await sendPartnerNotification(
+        partner._id,
+        'Welcome to Nexo!',
+        `Your partner account has been created successfully. You can now start accepting bookings.`,
+        'success',
+        '/android-chrome-192x192.png'
+      );
+    } catch (notifError) {
+      console.error('Notification error:', notifError);
+      // Don't fail the registration if notification fails
+    }
+
+    console.log('=== Partner Registration Successful ===');
+    console.log('Partner ID:', partner._id);
+    console.log('Partner Phone:', partner.phone);
+    
+    const responseData = {
+      success: true,
+      message: "Partner registered successfully",
+      partner: {
+        _id: partner._id,
+        phone: partner.phone,
+        name: partner.profile.name,
+        email: partner.profile.email,
+        referralCode: partner.referralCode,
+        status: partner.status
+      }
+    };
+    
+    console.log('Sending response:', JSON.stringify(responseData));
+    res.status(201).json(responseData);
+
+  } catch (error) {
+    console.error("=== Manual Partner Registration Error ===");
+    console.error("Error message:", error.message);
+    console.error("Error stack:", error.stack);
+    console.error("Error name:", error.name);
+    
+    // Ensure we always send a JSON response
+    if (!res.headersSent) {
+      // Set content type again in case it was changed
+      res.setHeader('Content-Type', 'application/json');
+      
+      return res.status(500).json({
+        success: false,
+        message: "Error registering partner",
+        error: error.message,
+        errorName: error.name,
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    } else {
+      console.error("Headers already sent, cannot send error response");
+    }
+  }
+};

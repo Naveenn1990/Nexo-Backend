@@ -715,15 +715,16 @@ connectDB()
   });
 
 // Swagger Documentation
-app.use(
-  "/api-docs",
-  swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, {
-    customCss: ".swagger-ui .topbar { display: none }",
-    customSiteTitle: "Wave API Documentation",
-  })
-);
+// app.use(
+//   "/api-docs",
+//   swaggerUi.serve,
+//   swaggerUi.setup(swaggerSpec, {
+//     customCss: ".swagger-ui .topbar { display: none }",
+//     customSiteTitle: "Wave API Documentation",
+//   })
+// );
 
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Configure helmet with necessary adjustments
 // app.use(
@@ -791,6 +792,9 @@ const tokenRoutes=require('./routes/tokenRoute');
 const RegisterFee=require('./routes/registerFeeRoutes');
 const RefferralAmount= require('./routes/referralAmountRoutes');
 const hubRoutes = require('./routes/hubRoutes');
+const vendorRoutes = require('./routes/vendorRoutes');
+const whatsappRoutes = require('./routes/whatsappRoutes');
+const payuRoutes = require('./routes/payuRoutes');
 // Initialize Firebase Admin
 try {
   // Check if Firebase is already initialized
@@ -828,9 +832,17 @@ app.use("/api/notification", partnerNotification);
 app.use('/api/driverfares', driverFareRoutes);
 app.use('/api/phonepay', phonePayRoutes);
 app.use('/api/tokens', tokenRoutes);
+// Register fee routes for public access (pricing settings)
+const registerFeeRouter = require('./routes/registerFeeRoutes');
+app.use('/api/registerFee', registerFeeRouter);
+
+// Admin register fee routes
 app.use('/api/admin', RegisterFee);
 app.use('/api/referral', RefferralAmount);
 app.use('/api/admin/hubs', hubRoutes);
+app.use('/api/vendor', vendorRoutes);
+app.use('/api/admin/whatsapp', whatsappRoutes);
+app.use('/api/payu', payuRoutes);
 // Add this route to your backend
 app.post('/api/admin/proxy-image', async (req, res) => {
   try {
@@ -875,4 +887,31 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 9000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  
+  // Auto-initialize WhatsApp automatically (no API call needed)
+  const whatsappService = require('./services/whatsappService');
+  const fs = require('fs');
+  const path = require('path');
+  
+  // Always attempt to auto-connect WhatsApp on server startup
+  setTimeout(async () => {
+    try {
+      console.log('Auto-connecting WhatsApp...');
+      await whatsappService.initialize();
+      
+      // Check status after initialization
+      setTimeout(() => {
+        const status = whatsappService.getStatus();
+        if (status.isReady) {
+          console.log('✅ WhatsApp auto-connected successfully!');
+        } else if (status.qrCode) {
+          console.log('⚠️  WhatsApp requires QR code scan. Please visit admin panel to scan QR code.');
+        } else {
+          console.log('ℹ️  WhatsApp initialization in progress...');
+        }
+      }, 5000);
+    } catch (error) {
+      console.log('ℹ️  WhatsApp auto-initialization:', error.message);
+    }
+  }, 3000); // Wait 3 seconds after server starts
 });

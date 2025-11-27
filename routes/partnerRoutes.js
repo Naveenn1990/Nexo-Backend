@@ -48,7 +48,8 @@ const {
   completeKYC,
   getAllPartnerProfile,
   updateKYCStatus,
-  updateLocation
+  updateLocation,
+  updateOnboardingStep
 } = require("../controllers/partnerAuthController");
 
 const {acceptBookingDriver,rejectBookingDriver,getByDriverId}=require('../controllers/DriverBooking')
@@ -75,6 +76,7 @@ router.post("/auth/verify-otp", verifyLoginOTP);
 
 // Partner Profile Routes (Protected)
 router.get("/profile", auth, getProfile);
+router.put("/profile/onboarding-step", auth, updateOnboardingStep);
 router.get("/partnersprofile", getAllPartnerProfile);
 
 router.put(
@@ -266,7 +268,7 @@ router.get(
 // Route to pause a booking
 router.post(
   "/bookings/:bookingId/pause",
-
+  auth,
   partnerServiceController.pauseBooking
 );
 
@@ -343,6 +345,8 @@ router.post("/sendSmsOtp", auth, sendSmsOtp);
 
 // MG Plan Routes (Partner)
 const mgPlanController = require('../controllers/mgPlanController');
+// Public route for fetching MG Plans (for onboarding page)
+router.get("/mg-plans/public", mgPlanController.getAllPlans);
 router.get("/mg-plans", auth, mgPlanController.getAllPlans);
 router.get("/mg-plans/current", auth, mgPlanController.getPartnerPlan);
 router.post("/mg-plans/subscribe", auth, mgPlanController.subscribeToPlan);
@@ -375,5 +379,19 @@ router.put("/team-members/:memberId", upload.fields([
 router.delete("/team-members/:memberId", auth, teamMemberController.deleteTeamMember);
 router.get("/team-members/:memberId/activities", auth, teamMemberController.getTeamMemberActivities);
 router.post("/team-members/assign-booking", auth, teamMemberController.assignBookingToTeamMember);
+
+// Partner Notifications
+// IMPORTANT: Order matters! More specific routes must come first
+const partnerNotificationController = require("../controllers/partnerNotification");
+router.get("/notifications", auth, partnerNotificationController.getPartnerNotifications);
+router.put("/notifications/mark-read", auth, partnerNotificationController.markAllAsRead);
+router.put("/notifications/:id/mark-read", auth, partnerNotificationController.markAsRead);
+
+// Quotation Routes
+const quotationController = require("../controllers/quotationController");
+router.post("/bookings/:bookingId/quotation", auth, quotationController.createQuotation);
+router.get("/bookings/:bookingId/quotations", auth, quotationController.getQuotationsByBooking);
+router.get("/quotations", auth, quotationController.getPartnerQuotations);
+router.get("/quotations/:quotationId", auth, quotationController.getQuotationById);
 
 module.exports = router;

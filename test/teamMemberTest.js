@@ -7,7 +7,7 @@
 const axios = require('axios');
 
 // Configuration
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:9088';
+const API_BASE_URL = process.env.API_BASE_URL || 'https://nexo.works';
 const PARTNER_TOKEN = process.env.PARTNER_TOKEN || 'YOUR_PARTNER_TOKEN_HERE'; // Replace with actual token
 
 // Test data

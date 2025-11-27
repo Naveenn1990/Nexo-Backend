@@ -21,7 +21,15 @@ exports.getAllPopularServices = async (req, res) => {
       description: service.description || '',
       trusted: service.trusted || 'Trusted by thousands of homes',
       included: service.included || [],
-      addOns: service.addOns || []
+      addOns: (service.addOns || []).map(addOn => ({
+        ...addOn,
+        included: addOn.included || [],
+        excluded: addOn.excluded || [],
+        subServices: (addOn.subServices || []).map(subService => ({
+          ...subService,
+          icon: subService.icon || 'FaTools'
+        }))
+      }))
     }));
 
     res.status(200).json({
@@ -67,7 +75,12 @@ exports.getPopularService = async (req, res) => {
       description: serviceObj.description || '',
       trusted: serviceObj.trusted || 'Trusted by thousands of homes',
       included: serviceObj.included || [],
-      addOns: serviceObj.addOns || []
+      addOns: (serviceObj.addOns || []).map(addOn => ({
+        ...addOn,
+        included: addOn.included || [],
+        excluded: addOn.excluded || [],
+        subServices: addOn.subServices || []
+      }))
     };
 
     res.status(200).json({
@@ -203,6 +216,19 @@ exports.updatePopularService = async (req, res) => {
     if (!service.trusted) service.trusted = 'Trusted by thousands of homes';
     if (!service.included || !Array.isArray(service.included)) service.included = [];
     if (!service.addOns || !Array.isArray(service.addOns)) service.addOns = [];
+    
+    // Ensure addOns have nested fields with default values
+    if (service.addOns && Array.isArray(service.addOns)) {
+      service.addOns = service.addOns.map(addOn => ({
+        ...addOn,
+        included: addOn.included || [],
+        excluded: addOn.excluded || [],
+        subServices: (addOn.subServices || []).map(subService => ({
+          ...subService,
+          icon: subService.icon || 'FaTools'
+        }))
+      }));
+    }
 
     await service.save();
 

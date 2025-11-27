@@ -22,6 +22,8 @@ const subscriptionPlanController = require('../controllers/subscriptionPlanContr
 const featuredReviewController = require('../controllers/featuredReviewController');
 const materialCategoryController = require('../controllers/materialCategoryController');
 const inventoryController = require('../controllers/inventoryController');
+const amcPlanController = require('../controllers/amcPlanController');
+const adminVendorController = require('../controllers/adminVendorController');
 
 // Auth routes
 router.post("/login", adminController.loginAdmin);
@@ -41,6 +43,25 @@ router.get("/users", adminAuth, adminController.getAllUsers);
 
 // Partner management
 router.get("/partners", adminAuth, adminController.getAllPartners);
+
+// Test endpoint to verify route is working
+router.post("/partners/manual-register/test", adminAuth, (req, res) => {
+  res.json({ success: true, message: "Route is working", body: Object.keys(req.body) });
+});
+
+router.post("/partners/manual-register", adminAuth, upload.any(), (req, res, next) => {
+  // Wrap controller in try-catch to ensure JSON response
+  try {
+    adminController.manualPartnerRegistration(req, res, next);
+  } catch (error) {
+    console.error('Route-level error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error in route handler',
+      error: error.message
+    });
+  }
+});
 router.get(
   "/partners/:partnerId",
   adminAuth,
@@ -51,12 +72,28 @@ router.get(
 router.put("/partners/:id", adminController.getPartnerProfile); 
 
 router.put("/partners/:partnerId/status", adminController.updatePartnerStatus);
+router.put("/partners/:partnerId/approve-payment", adminController.approvePartnerPayment);
+router.put("/partners/:partnerId/mg-plan/payment-details", adminAuth, adminController.updateMGPlanPaymentDetails);
 router.get("/partners/kyc/pending", adminAuth, adminController.getPendingKYC);
 router.get(
   "/partners/:partnerId/kyc",
   adminAuth,
   adminController.getPartnerKYC
 );
+
+// Vendor management
+router.get("/vendors", adminAuth, adminVendorController.getAllVendors);
+router.post("/vendors", adminAuth, adminVendorController.createVendor);
+
+// Vendor Spare Parts (Admin can view all vendor spare parts) - MUST come before /vendors/:vendorId
+router.get("/vendors/spare-parts", adminAuth, adminVendorController.getAllVendorSpareParts);
+router.get("/vendors/:vendorId/spare-parts", adminAuth, adminVendorController.getVendorSpareParts);
+
+// Vendor details and management - MUST come after specific routes
+router.get("/vendors/:vendorId", adminAuth, adminVendorController.getVendorDetails);
+router.put("/vendors/:vendorId", adminAuth, adminVendorController.updateVendor);
+router.put("/vendors/:vendorId/status", adminAuth, adminVendorController.updateVendorStatus);
+router.delete("/vendors/:vendorId", adminAuth, adminVendorController.deleteVendor);
 router.put(
   "/partners/:partnerId/kyc",
   adminAuth,
@@ -381,6 +418,7 @@ router.get('/mg-plans/:planId', adminAuth, mgPlanController.getPlanById);
 router.post('/mg-plans', adminAuth, mgPlanController.createPlan);
 router.put('/mg-plans/:planId', adminAuth, mgPlanController.updatePlan);
 router.delete('/mg-plans/:planId', adminAuth, mgPlanController.deletePlan);
+router.post('/mg-plans/:planId/subscribe', adminAuth, mgPlanController.adminSubscribeToPlan);
 
 router.get(
   '/partners/:partnerId/service-hubs',
@@ -418,6 +456,13 @@ router.get('/subscription-plans/:planId', adminAuth, subscriptionPlanController.
 router.post('/subscription-plans', adminAuth, subscriptionPlanController.createPlan);
 router.put('/subscription-plans/:planId', adminAuth, subscriptionPlanController.updatePlan);
 router.delete('/subscription-plans/:planId', adminAuth, subscriptionPlanController.deletePlan);
+
+// AMC Plans Management (Admin)
+router.get('/amc-plans', adminAuth, amcPlanController.getAllPlansAdmin);
+router.get('/amc-plans/:planId', adminAuth, amcPlanController.getPlanById);
+router.post('/amc-plans', adminAuth, amcPlanController.createPlan);
+router.put('/amc-plans/:planId', adminAuth, amcPlanController.updatePlan);
+router.delete('/amc-plans/:planId', adminAuth, amcPlanController.deletePlan);
 
 // Featured Reviews Management (Admin)
 router.get('/featured-reviews', adminAuth, featuredReviewController.getAllReviewsAdmin);
@@ -457,5 +502,12 @@ router.get('/inventory/thresholds/:category', adminAuth, inventoryController.get
 router.post('/inventory/thresholds', adminAuth, inventoryController.upsertThreshold);
 router.put('/inventory/thresholds/:category', adminAuth, inventoryController.upsertThreshold);
 router.delete('/inventory/thresholds/:category', adminAuth, inventoryController.deleteThreshold);
+
+// Quotation Routes (Admin)
+const quotationController = require("../controllers/quotationController");
+router.get("/quotations", adminAuth, quotationController.getAllQuotations);
+router.get("/quotations/:quotationId", adminAuth, quotationController.getQuotationById);
+router.put("/quotations/:quotationId/approve", adminAuth, quotationController.adminAcceptQuotation);
+router.put("/quotations/:quotationId/reject", adminAuth, quotationController.adminRejectQuotation);
 
 module.exports = router;

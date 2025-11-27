@@ -793,4 +793,12 @@ router.get(
 router.get("/api/user/bookings", auth, bookingController.getAllUserBookings);
 router.put("/updateFcmToken", userController.updateFcmToken);
 router.delete('/deleteduser',auth,userController.deleteUser)
+
+// Quotation Routes (Customer)
+const quotationController = require("../controllers/quotationController");
+router.get("/bookings/:bookingId/quotations", auth, quotationController.getQuotationsByBooking);
+router.get("/quotations/:quotationId", auth, quotationController.getQuotationById);
+router.post("/quotations/:quotationId/accept", auth, quotationController.customerAcceptQuotation);
+router.post("/quotations/:quotationId/reject", auth, quotationController.customerRejectQuotation);
+
 module.exports = router;

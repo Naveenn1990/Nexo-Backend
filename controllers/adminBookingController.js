@@ -1,4 +1,5 @@
 const Booking = require('../models/booking');  // Make sure this path is correct
+const Quotation = require('../models/Quotation');
 
 exports.getAllBookings = async (req, res) => {
     try {
@@ -113,6 +114,24 @@ exports.getAllBookings = async (req, res) => {
             .limit(limitNum)
             .lean(); // Convert to plain JS objects for better performance
 
+        // Step 4.5: Fetch quotations for each booking
+        const bookingIds = bookings.map(b => b._id);
+        const quotations = await Quotation.find({ booking: { $in: bookingIds } })
+            .populate('booking', 'bookingId _id')
+            .populate('partner', 'profile.name phone')
+            .populate('user', 'name email phone')
+            .lean();
+        
+        // Create a map of bookingId -> quotations
+        const quotationsByBooking = {};
+        quotations.forEach(quotation => {
+            const bookingId = quotation.booking.toString();
+            if (!quotationsByBooking[bookingId]) {
+                quotationsByBooking[bookingId] = [];
+            }
+            quotationsByBooking[bookingId].push(quotation);
+        });
+
         // Step 5: Format the bookings
         const formattedBookings = bookings.map(booking => ({
             _id: booking._id,
@@ -135,6 +154,12 @@ exports.getAllBookings = async (req, res) => {
             scheduledDate: booking.scheduledDate,
             scheduledTime: booking.scheduledTime,
             chat: booking.chat,
+            quotations: quotationsByBooking[booking._id.toString()] || [], // Add quotations
+            remark: booking.remark || null, // Add partner remark
+            pauseDetails: booking.pauseDetails || null, // Add pause details
+            photos: booking.photos || [], // Add photos
+            videos: booking.videos || [], // Add videos
+            completedAt: booking.completedAt || null, // Add completion date
             booking,
             location: {
                 address: booking.location?.address || 'N/A',

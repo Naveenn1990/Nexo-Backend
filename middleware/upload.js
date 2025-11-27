@@ -33,7 +33,22 @@ const storage = multer.diskStorage({
 
 // Create multer upload middleware
 const upload = multer({
- 
+    storage: storage,
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB limit
+    },
+    fileFilter: (req, file, cb) => {
+        // Accept images and PDFs
+        const allowedTypes = /jpeg|jpg|png|gif|pdf|webp/;
+        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+        const mimetype = allowedTypes.test(file.mimetype);
+        
+        if (extname && mimetype) {
+            return cb(null, true);
+        } else {
+            cb(new Error('Only images and PDF files are allowed!'));
+        }
+    }
 });
 
 // Middleware to process uploaded file path
