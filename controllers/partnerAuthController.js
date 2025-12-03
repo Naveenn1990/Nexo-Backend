@@ -9,10 +9,11 @@ const SubCategory = require("../models/SubCategory");
 const Service = require("../models/Service");
 const mongoose = require("mongoose");
 const NotificationModel = require("../models/Notification");
-const { uploadFile2 } = require("../middleware/aws");
+const { uploadFile2, handleFileUpload } = require("../middleware/aws");
 const ReferralAmount = require("../models/ReferralAmount");
 const { PaymentTransaction } = require("../models/RegisterFee");
 const phonePayModel = require("../models/phonePay");
+const path = require("path");
 // Send OTP for partner login/registration
 exports.sendLoginOTP = async (req, res) => {
   try {
@@ -653,7 +654,7 @@ exports.completeProfile = async (req, res) => {
     }
 
     // ✅ Fix: Correctly extract the filename
-    const profilePicturePath = req.file ? await uploadFile2(req.file, "partner") : null;
+    const profilePicturePath = req.file ? await handleFileUpload(req.file, "partner") : null;
 
     const updatedPartner = await Partner.findOneAndUpdate(
       { phone: contactNumber },
@@ -1070,12 +1071,12 @@ exports.completeKYC = async (req, res) => {
     }
 
     // Upload files to AWS S3
-    let panCard = await uploadFile2(req.files.panCard[0], "partnerdoc");
-    let aadhaar = await uploadFile2(req.files.aadhaar[0], "partnerdoc");
-    let chequeImage = await uploadFile2(req.files.chequeImage[0], "partnerdoc");
-    let aadhaarback = await uploadFile2(req.files.aadhaarback[0], "partnerdoc");
-    let drivingLicence = await uploadFile2(req.files.drivingLicence[0], "partnerdoc");
-    let bill = await uploadFile2(req.files.bill[0], "partnerdoc");
+    let panCard = await handleFileUpload(req.files.panCard[0], "partnerdoc");
+    let aadhaar = await handleFileUpload(req.files.aadhaar[0], "partnerdoc");
+    let chequeImage = await handleFileUpload(req.files.chequeImage[0], "partnerdoc");
+    let aadhaarback = await handleFileUpload(req.files.aadhaarback[0], "partnerdoc");
+    let drivingLicence = await handleFileUpload(req.files.drivingLicence[0], "partnerdoc");
+    let bill = await handleFileUpload(req.files.bill[0], "partnerdoc");
 
     // Validate required fields
     if (!accountNumber || !ifscCode || !accountHolderName || !bankName) {
@@ -1163,37 +1164,78 @@ exports.updatedDocuments = async (req, res) => {
     let { id } = req.body;
 
     let data = await Partner.findById(id);
-    if (!data) return res.status(400).json({ error: "Data not found" });
+    if (!data) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "Partner not found" 
+      });
+    }
+
+    // Initialize kyc object if it doesn't exist
+    if (!data.kyc) {
+      data.kyc = {};
+    }
 
     if (req.files && req.files.length > 0) {
       let arr = req.files;
-      let i;
-      for (i = 0; i < arr?.length; i++) {
-        if (arr[i].fieldname == "panCard") {
-          data.kyc.panCard = await uploadFile2(arr[i], "partnerdoc");
-        }
-        if (arr[i].fieldname == "aadhaar") {
-          data.kyc.aadhaar = await uploadFile2(arr[i], "partnerdoc");
-        }
-        if (arr[i].fieldname == "aadhaarback") {
-          data.kyc.aadhaarback = await uploadFile2(arr[i], "partnerdoc");
-        }
-        if (arr[i].fieldname == "chequeImage") {
-          data.kyc.chequeImage = await uploadFile2(arr[i], "partnerdoc");
-        }
-        if (arr[i].fieldname == "drivingLicence") {
-          data.kyc.drivingLicence = await uploadFile2(arr[i], "partnerdoc");
-        }
-        if (arr[i].fieldname == "bill") {
-          data.kyc.bill = await uploadFile2(arr[i], "partnerdoc");
+      let uploadedFiles = [];
+      
+      for (let i = 0; i < arr.length; i++) {
+        try {
+          if (arr[i].fieldname == "panCard") {
+            data.kyc.panCard = await handleFileUpload(arr[i], "partnerdoc");
+            uploadedFiles.push("PAN Card");
+          }
+          if (arr[i].fieldname == "aadhaar") {
+            data.kyc.aadhaar = await handleFileUpload(arr[i], "partnerdoc");
+            uploadedFiles.push("Aadhaar (Front)");
+          }
+          if (arr[i].fieldname == "aadhaarback") {
+            data.kyc.aadhaarback = await handleFileUpload(arr[i], "partnerdoc");
+            uploadedFiles.push("Aadhaar (Back)");
+          }
+          if (arr[i].fieldname == "chequeImage") {
+            data.kyc.chequeImage = await handleFileUpload(arr[i], "partnerdoc");
+            uploadedFiles.push("Cancelled Cheque");
+          }
+          if (arr[i].fieldname == "drivingLicence") {
+            data.kyc.drivingLicence = await handleFileUpload(arr[i], "partnerdoc");
+            uploadedFiles.push("Driving Licence");
+          }
+          if (arr[i].fieldname == "bill") {
+            data.kyc.bill = await handleFileUpload(arr[i], "partnerdoc");
+            uploadedFiles.push("Utility Bill");
+          }
+        } catch (uploadError) {
+          console.error(`Error uploading ${arr[i].fieldname}:`, uploadError);
+          return res.status(500).json({ 
+            success: false, 
+            error: `Failed to upload ${arr[i].fieldname}`,
+            message: uploadError.message 
+          });
         }
       }
-    }
-    data = await data.save();
+      
+      data = await data.save();
 
-    return res.status(200).json({ success: "Successfully updated" })
+      return res.status(200).json({ 
+        success: true,
+        message: "KYC documents updated successfully",
+        uploadedFiles: uploadedFiles
+      });
+    } else {
+      return res.status(400).json({ 
+        success: false, 
+        error: "No files provided for upload" 
+      });
+    }
   } catch (error) {
-    console.log(error)
+    console.error("Error updating KYC documents:", error);
+    return res.status(500).json({ 
+      success: false, 
+      error: "Failed to update KYC documents",
+      message: error.message 
+    });
   }
 }
 // New endpoint for admin to update KYC status
@@ -1398,7 +1440,7 @@ exports.updateProfile = async (req, res) => {
     }
 
     // Check if profilePicture is uploaded in form-data
-    const profilePicture = req.file ? await uploadFile2(req.file, "partner") : undefined;
+    const profilePicture = req.file ? await handleFileUpload(req.file, "partner") : undefined;
 
     // Update only provided fields (Handle both JSON & form-data)
 

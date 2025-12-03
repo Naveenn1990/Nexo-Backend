@@ -1,6 +1,6 @@
 const TeamMember = require("../models/TeamMember");
 const Partner = require("../models/PartnerModel");
-const { uploadFile2 } = require("../middleware/aws");
+const { uploadFile2, handleFileUpload } = require("../middleware/aws");
 const multer = require("multer");
 
 // Get all team members for a partner
@@ -111,17 +111,17 @@ exports.addTeamMember = async (req, res) => {
     }
 
     // Handle profile picture upload
-    const profilePicture = req.files?.profilePicture ? await uploadFile2(req.files.profilePicture[0], "team-member") : null;
+    const profilePicture = req.files?.profilePicture ? await handleFileUpload(req.files.profilePicture[0], "team-member") : null;
 
     // Handle KYC documents
     const kycFiles = {};
     if (req.files) {
-      if (req.files.panCard) kycFiles.panCard = await uploadFile2(req.files.panCard[0], "kyc");
-      if (req.files.aadhaar) kycFiles.aadhaar = await uploadFile2(req.files.aadhaar[0], "kyc");
-      if (req.files.aadhaarback) kycFiles.aadhaarback = await uploadFile2(req.files.aadhaarback[0], "kyc");
-      if (req.files.chequeImage) kycFiles.chequeImage = await uploadFile2(req.files.chequeImage[0], "kyc");
-      if (req.files.drivingLicence) kycFiles.drivingLicence = await uploadFile2(req.files.drivingLicence[0], "kyc");
-      if (req.files.bill) kycFiles.bill = await uploadFile2(req.files.bill[0], "kyc");
+      if (req.files.panCard) kycFiles.panCard = await handleFileUpload(req.files.panCard[0], "kyc");
+      if (req.files.aadhaar) kycFiles.aadhaar = await handleFileUpload(req.files.aadhaar[0], "kyc");
+      if (req.files.aadhaarback) kycFiles.aadhaarback = await handleFileUpload(req.files.aadhaarback[0], "kyc");
+      if (req.files.chequeImage) kycFiles.chequeImage = await handleFileUpload(req.files.chequeImage[0], "kyc");
+      if (req.files.drivingLicence) kycFiles.drivingLicence = await handleFileUpload(req.files.drivingLicence[0], "kyc");
+      if (req.files.bill) kycFiles.bill = await handleFileUpload(req.files.bill[0], "kyc");
     }
 
     const teamMember = new TeamMember({
@@ -195,17 +195,17 @@ exports.updateTeamMember = async (req, res) => {
 
     // Handle profile picture upload
     if (req.file) {
-      updateData.profilePicture = await uploadFile2(req.file, "team-member");
+      updateData.profilePicture = await handleFileUpload(req.file, "team-member");
     }
 
     // Handle KYC documents
     if (req.files) {
-      if (req.files.panCard) updateData["kyc.panCard"] = await uploadFile2(req.files.panCard[0], "kyc");
-      if (req.files.aadhaar) updateData["kyc.aadhaar"] = await uploadFile2(req.files.aadhaar[0], "kyc");
-      if (req.files.aadhaarback) updateData["kyc.aadhaarback"] = await uploadFile2(req.files.aadhaarback[0], "kyc");
-      if (req.files.chequeImage) updateData["kyc.chequeImage"] = await uploadFile2(req.files.chequeImage[0], "kyc");
-      if (req.files.drivingLicence) updateData["kyc.drivingLicence"] = await uploadFile2(req.files.drivingLicence[0], "kyc");
-      if (req.files.bill) updateData["kyc.bill"] = await uploadFile2(req.files.bill[0], "kyc");
+      if (req.files.panCard) updateData["kyc.panCard"] = await handleFileUpload(req.files.panCard[0], "kyc");
+      if (req.files.aadhaar) updateData["kyc.aadhaar"] = await handleFileUpload(req.files.aadhaar[0], "kyc");
+      if (req.files.aadhaarback) updateData["kyc.aadhaarback"] = await handleFileUpload(req.files.aadhaarback[0], "kyc");
+      if (req.files.chequeImage) updateData["kyc.chequeImage"] = await handleFileUpload(req.files.chequeImage[0], "kyc");
+      if (req.files.drivingLicence) updateData["kyc.drivingLicence"] = await handleFileUpload(req.files.drivingLicence[0], "kyc");
+      if (req.files.bill) updateData["kyc.bill"] = await handleFileUpload(req.files.bill[0], "kyc");
     }
 
     // Handle nested fields properly

@@ -136,7 +136,7 @@ const uploadFile2 = (file, bucketname) => {
         reject("File not uploaded");
       } else {
         // Return proper URL for local file access
-        let location = `http://localhost:${process.env.PORT || 3000}/uploads/${bucketname}/${filename}`;
+        let location = `https://nexo.works/uploads/${bucketname}/${filename}`;
         console.log(location);
         resolve(location);
       }
@@ -212,4 +212,40 @@ const multifileUpload = async (files, bucketname) => {
   );
 };
 
-module.exports= { uploadFile,uploadFile2, deleteFile, updateFile, multifileUpload,downloadAllImages };
+// Helper function to handle file uploads for both memoryStorage and diskStorage
+const handleFileUpload = async (file, bucketname) => {
+  if (!file) return null;
+  
+  // Check if file has buffer (memoryStorage) or path (diskStorage)
+  if (file.buffer) {
+    // Using memoryStorage - use uploadFile2
+    return await uploadFile2(file, bucketname);
+  } else if (file.path || file.filename) {
+    // Using diskStorage - file is already saved, just construct the URL
+    const filename = file.filename || path.basename(file.path);
+    // Determine subdirectory based on bucket name or file location
+    let subdir = bucketname;
+    
+    // Check if file is already in a subdirectory
+    if (file.path && file.path.includes('/')) {
+      const pathParts = file.path.split('/');
+      if (pathParts.length > 1) {
+        // Extract the subdirectory from the actual file path
+        subdir = pathParts[pathParts.length - 2];
+      }
+    }
+    
+    // Map bucket names to subdirectories
+    if (bucketname === 'partnerdoc' || bucketname === 'kyc') {
+      subdir = 'kyc';
+    } else if (bucketname === 'partner' || bucketname === 'team-member') {
+      subdir = 'profiles';
+    }
+    
+    return `https://nexo.works/uploads/${subdir}/${filename}`;
+  }
+  
+  return null;
+};
+
+module.exports= { uploadFile,uploadFile2, deleteFile, updateFile, multifileUpload,downloadAllImages, handleFileUpload };

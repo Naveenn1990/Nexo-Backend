@@ -874,7 +874,7 @@ exports.getAllPartners = async (req, res) => {
             modeOfService: partner.modeOfService || "N/A",
             profileCompleted: partner.profileCompleted,
             agentName: partner.agentName,
-            profilePicture: partner.profilePicture || "N/A",
+            profilePicture: partner.profilePicture ? `/uploads/profiles/${partner.profilePicture}` : "N/A",
             createdAt: partner.createdAt,
             updatedAt: partner.updatedAt,
             KYC: {
@@ -902,6 +902,7 @@ exports.getAllPartners = async (req, res) => {
           mgPlanLeadsUsed: partner.mgPlanLeadsUsed || 0,
           mgPlanSubscribedAt: partner.mgPlanSubscribedAt || null,
           mgPlanExpiresAt: partner.mgPlanExpiresAt || null,
+          mgPlanHistory: partner.mgPlanHistory || [],
         };
       })
     );
@@ -919,6 +920,106 @@ exports.getAllPartners = async (req, res) => {
   }
 };
 
+// Get partner revenue statistics
+exports.getPartnerRevenueStats = async (req, res) => {
+  try {
+    // Calculate total registration fees from PaymentTransaction collection
+    const registrationTransactions = await PaymentTransaction.find({
+      feeType: 'registration',
+      status: 'success'
+    }).lean();
+    
+    const totalRegistrationFees = registrationTransactions.reduce((sum, txn) => {
+      return sum + (txn.amount || 0);
+    }, 0);
+
+    // Get all partners for security deposit, toolkit, and MG Plan revenue calculation
+    const allPartners = await Partner.find({})
+      .select('securityDeposit toolkitPrice mgPlanHistory')
+      .lean();
+
+    // Calculate total security deposit fees from Partner model
+    let totalSecurityDepositFromPartners = allPartners.reduce((sum, partner) => {
+      return sum + (partner.securityDeposit || 0);
+    }, 0);
+
+    // Calculate total toolkit fees from Partner model
+    let totalToolkitFromPartners = allPartners.reduce((sum, partner) => {
+      return sum + (partner.toolkitPrice || 0);
+    }, 0);
+
+    // Also check PaymentTransaction metadata for security deposit and toolkit
+    // (in case they're stored there instead of Partner model)
+    const allTransactions = await PaymentTransaction.find({
+      status: 'success'
+    }).lean();
+
+    let totalSecurityDepositFromTransactions = 0;
+    let totalToolkitFromTransactions = 0;
+
+    allTransactions.forEach((txn) => {
+      if (txn.metadata && txn.metadata.priceBreakdown) {
+        totalSecurityDepositFromTransactions += txn.metadata.priceBreakdown.securityDeposit || 0;
+        totalToolkitFromTransactions += txn.metadata.priceBreakdown.toolkitPrice || 0;
+      }
+    });
+
+    // Use whichever source has data (prefer Partner model, fallback to transactions)
+    const totalSecurityDeposit = totalSecurityDepositFromPartners > 0 
+      ? totalSecurityDepositFromPartners 
+      : totalSecurityDepositFromTransactions;
+    
+    const totalToolkitFees = totalToolkitFromPartners > 0 
+      ? totalToolkitFromPartners 
+      : totalToolkitFromTransactions;
+
+    // Calculate total MG Plan revenue
+    const totalMGPlanRevenue = allPartners.reduce((sum, partner) => {
+      if (partner.mgPlanHistory && Array.isArray(partner.mgPlanHistory)) {
+        const mgPlanTotal = partner.mgPlanHistory.reduce((planSum, plan) => {
+          return planSum + (plan.price || 0);
+        }, 0);
+        return sum + mgPlanTotal;
+      }
+      return sum;
+    }, 0);
+
+    // Calculate total partner earnings from completed bookings
+    const completedBookings = await booking.find({ status: "completed" })
+      .populate('subService', 'commission')
+      .lean();
+
+    let totalPartnerEarnings = 0;
+    completedBookings.forEach((bkg) => {
+      const totalAmount = bkg.amount || 0;
+      const commissionPercentage = bkg.subService?.commission || 0;
+      const commissionAmount = (commissionPercentage / 100) * totalAmount;
+      const partnerEarnings = totalAmount - commissionAmount;
+      totalPartnerEarnings += partnerEarnings;
+    });
+
+    // Total revenue = Registration + Security Deposit + Toolkit + MG Plans + Partner Earnings
+    const totalRevenue = totalRegistrationFees + totalSecurityDeposit + totalToolkitFees + totalMGPlanRevenue + totalPartnerEarnings;
+
+    res.json({
+      success: true,
+      stats: {
+        totalRegistrationFees,
+        totalSecurityDeposit,
+        totalToolkitFees,
+        totalMGPlanRevenue,
+        totalPartnerEarnings,
+        totalRevenue
+      }
+    });
+  } catch (error) {
+    console.error("Get Partner Revenue Stats Error:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error fetching partner revenue statistics" 
+    });
+  }
+};
 
 // Get partner details
 // Get partner details along with earnings and transactions
@@ -1028,6 +1129,22 @@ exports.getPartnerDetails = async (req, res) => {
           .map(cat => cat?.name || cat?.description)
           .filter(Boolean);
       }
+    }
+    
+    // If hubs array is empty or not populated, but serviceHubs has data, use serviceHubs
+    if ((!partnerData.hubs || partnerData.hubs.length === 0) && partnerData.serviceHubs && partnerData.serviceHubs.length > 0) {
+      console.log('Using serviceHubs as fallback for hubs display');
+      // Map serviceHubs to a format compatible with the hubs display
+      partnerData.displayHubs = partnerData.serviceHubs.map(sh => ({
+        _id: sh.hubId || sh._id,
+        name: sh.name,
+        areas: sh.pinCodes ? [{
+          areaName: 'Service Area',
+          pinCodes: sh.pinCodes
+        }] : []
+      }));
+    } else if (partnerData.hubs && partnerData.hubs.length > 0) {
+      partnerData.displayHubs = partnerData.hubs;
     }
     
     // Log for debugging
@@ -2137,6 +2254,14 @@ exports.approvePartnerPayment = async (req, res) => {
     const { partnerId } = req.params;
     const { registerAmount, payId, paidBy, paymentApproved, approvedBy, approvedAt } = req.body;
 
+    console.log('Approve Payment Request:', {
+      partnerId,
+      body: req.body,
+      payId,
+      registerAmount,
+      paidBy
+    });
+
     // Find the partner
     const partner = await Partner.findById(partnerId);
     if (!partner) {
@@ -2146,26 +2271,44 @@ exports.approvePartnerPayment = async (req, res) => {
       });
     }
 
-    // Update payment information
-    if (partner.profile) {
-      if (registerAmount !== undefined) {
-        partner.profile.registerAmount = registerAmount;
-      }
-      if (payId !== undefined) {
-        partner.profile.payId = payId;
-      }
-      if (paidBy !== undefined) {
-        partner.profile.paidBy = paidBy;
-      }
+    console.log('Partner before update:', {
+      id: partner._id,
+      currentPayId: partner.profile?.payId,
+      currentRegisterAmount: partner.profile?.registerAmount,
+      currentPaidBy: partner.profile?.paidBy
+    });
 
-      // Mark payment as approved
-      partner.profile.registerdFee = true;
-
-      // Add approval metadata
-      partner.profile.paymentApproved = paymentApproved || true;
-      partner.profile.approvedBy = approvedBy || 'Admin';
-      partner.profile.approvedAt = approvedAt || new Date();
+    // Initialize profile if it doesn't exist
+    if (!partner.profile) {
+      partner.profile = {};
     }
+
+    // Use set() method for nested fields to ensure Mongoose tracks changes
+    if (registerAmount !== undefined) {
+      partner.set('profile.registerAmount', registerAmount);
+    }
+    if (payId !== undefined && payId !== null && payId !== '') {
+      partner.set('profile.payId', payId);
+    }
+    if (paidBy !== undefined) {
+      partner.set('profile.paidBy', paidBy);
+    }
+
+    // Mark payment as approved
+    partner.set('profile.registerdFee', true);
+
+    // Add approval metadata
+    partner.set('profile.paymentApproved', paymentApproved || true);
+    partner.set('profile.approvedBy', approvedBy || 'Admin');
+    partner.set('profile.approvedAt', approvedAt || new Date());
+
+    console.log('Partner after update (before save):', {
+      id: partner._id,
+      newPayId: partner.get('profile.payId'),
+      newRegisterAmount: partner.get('profile.registerAmount'),
+      newPaidBy: partner.get('profile.paidBy'),
+      registerdFee: partner.get('profile.registerdFee')
+    });
 
     // Update profile completion status
     const hasBasicFields = partner.profile?.name &&
@@ -2177,12 +2320,28 @@ exports.approvePartnerPayment = async (req, res) => {
       partner.profileCompleted = true;
     }
 
-    partner.profileStatus = 'active';
-    partner.status = 'approved';
+    partner.set('profileStatus', 'active');
+    partner.set('status', 'approved');
 
     await partner.save();
 
-    console.log("partner",partner);
+    console.log("Partner saved successfully:", {
+      id: partner._id,
+      savedPayId: partner.get('profile.payId'),
+      savedRegisterAmount: partner.get('profile.registerAmount'),
+      savedPaidBy: partner.get('profile.paidBy'),
+      registerdFee: partner.get('profile.registerdFee')
+    });
+    
+    // Verify by fetching fresh from DB
+    const verifyPartner = await Partner.findById(partnerId);
+    console.log("Verification from DB:", {
+      id: verifyPartner._id,
+      dbPayId: verifyPartner.profile?.payId,
+      dbRegisterAmount: verifyPartner.profile?.registerAmount,
+      dbPaidBy: verifyPartner.profile?.paidBy,
+      dbRegisterdFee: verifyPartner.profile?.registerdFee
+    });
 
     // Send notification to partner about payment approval
     const { sendPartnerNotification } = require("../services/notificationService");
@@ -2452,9 +2611,13 @@ exports.manualPartnerRegistration = async (req, res) => {
       },
       category: parsedCategory,
       categoryNames: parsedCategoryNames,
+      // Store hub IDs in hubs array for reference
+      hubs: parsedSelectedHubs.map(hub => hub.hubId).filter(Boolean),
+      // Store detailed hub info in serviceHubs
       serviceHubs: parsedSelectedHubs.map(hub => {
         // Handle both formats: {hubId, name, pinCodes} or {name, pinCodes}
         const mappedHub = {
+          hubId: hub.hubId || null,
           name: hub.name || '',
           pinCodes: Array.isArray(hub.pinCodes) ? hub.pinCodes : [],
           isPrimary: hub.isPrimary || false

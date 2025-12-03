@@ -9,22 +9,45 @@ if (!fs.existsSync(fullUploadPath)) {
     fs.mkdirSync(fullUploadPath, { recursive: true });
 }
 
-// Create banners subdirectory if it doesn't exist
+// Create subdirectories if they don't exist
 const bannerPath = path.join(fullUploadPath, 'banners');
 if (!fs.existsSync(bannerPath)) {
     fs.mkdirSync(bannerPath, { recursive: true });
 }
 
+const kycPath = path.join(fullUploadPath, 'kyc');
+if (!fs.existsSync(kycPath)) {
+    fs.mkdirSync(kycPath, { recursive: true });
+}
+
+const profilesPath = path.join(fullUploadPath, 'profiles');
+if (!fs.existsSync(profilesPath)) {
+    fs.mkdirSync(profilesPath, { recursive: true });
+}
+
 // Configure storage
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        // Choose destination based on route
-        const dest = req.originalUrl.includes('/banners') ? bannerPath : fullUploadPath;
+        // Choose destination based on route or field name
+        let dest = fullUploadPath;
+        
+        if (req.originalUrl.includes('/banners')) {
+            dest = bannerPath;
+        } else if (['panCard', 'aadhaar', 'aadhaarback', 'drivingLicence', 'bill', 'chequeImage'].includes(file.fieldname)) {
+            // KYC documents go to kyc subdirectory
+            dest = kycPath;
+        } else if (file.fieldname === 'profilePicture' || file.fieldname === 'profileImage') {
+            // Profile pictures go to profiles subdirectory
+            dest = profilesPath;
+        }
+        
         cb(null, dest);
     },
     filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const filename = uniqueSuffix + path.extname(file.originalname);
+        // Create a clean filename with original name preserved
+        const cleanOriginalName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const timestamp = Date.now();
+        const filename = `${file.fieldname}-${timestamp}-${cleanOriginalName}`;
         // Store filename in request for easy access
         req.uploadedFilename = filename;
         cb(null, filename);
@@ -65,11 +88,11 @@ const processFilePath = (req, res, next) => {
 const stripUrl = (filename) => {
     if (!filename) return filename;
     // Handle various URL patterns
-    if (filename.includes('https://wavetechservices.in/uploads/')) {
-        return filename.replace('https://wavetechservices.in/uploads/', '');
+    if (filename.includes('https://nexo.works/uploads/')) {
+        return filename.replace('https://nexo.works/uploads/', '');
     }
-    if (filename.includes('https://wavetechservices.in/')) {
-        return filename.replace('https://wavetechservices.in/', '');
+    if (filename.includes('https://nexo.works/')) {
+        return filename.replace('https://nexo.works/', '');
     }
     if (filename.includes('/')) {
         return filename.split('/').pop();

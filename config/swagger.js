@@ -12,7 +12,7 @@ const options = {
       {
         url: process.env.NODE_ENV === 'production' 
           ? process.env.PRODUCTION_API_URL 
-          : process.env.BASE_URL || 'https://wavetechservices.in',
+          : process.env.BASE_URL || 'https://nexo.works',
         description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Development server',
       },
     ],

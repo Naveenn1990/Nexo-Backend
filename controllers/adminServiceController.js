@@ -8,7 +8,7 @@ const path = require('path');
 const SubCategory = require("../models/SubCategory");
 const Product = require("../models/product");
 const Partner = require("../models/PartnerModel");
-const { uploadFile2, multifileUpload } = require('../middleware/aws');
+const { uploadFile2, multifileUpload, handleFileUpload } = require('../middleware/aws');
 const PartnerWallet = require('../models/PartnerWallet');
 const MGPlan = require('../models/MGPlan');
 // Get all services
@@ -1387,6 +1387,14 @@ exports.updatePartnerProfile = async (req, res) => {
   try {
     let { id } = req.params;
     
+    console.log('Update Partner Profile Request:', {
+      partnerId: id,
+      contentType: req.headers['content-type'],
+      hasFile: !!req.file,
+      bodyKeys: Object.keys(req.body),
+      body: req.body
+    });
+    
     // Handle both JSON and FormData
     let bodyData = req.body
     // If it's FormData, bodyData will already be parsed by multer
@@ -1399,6 +1407,7 @@ exports.updatePartnerProfile = async (req, res) => {
       whatsappNumber,
       qualification,
       experience,
+      partnerType,
       address,
       landmark,
       pincode,
@@ -1418,7 +1427,11 @@ exports.updatePartnerProfile = async (req, res) => {
       // Payment Info
       registerAmount,
       payId,
-      paidBy
+      paidBy,
+      securityDeposit,
+      toolkitPrice,
+      // Profile Status
+      profileCompleted
     } = bodyData;
     
     let updatedPartner = await Partner.findById(id);
@@ -1429,40 +1442,54 @@ exports.updatePartnerProfile = async (req, res) => {
       });
     }
 
+    // Initialize profile object if it doesn't exist
+    if (!updatedPartner.profile) {
+      updatedPartner.profile = {};
+    }
+
     // Update profile fields
-    if (name) {
+    if (name !== undefined) {
       updatedPartner.profile.name = name; 
     }
-    if (email && updatedPartner.profile.email !== email.trim()) {
-      // Check if email already exists
-      const existingPartner = await Partner.findOne({ "profile.email": email.trim(), _id: { $ne: id } });
-      if (existingPartner) {
-        return res.status(400).json({
-          success: false,
-          message: "Email already exists."
-        });
+    if (email !== undefined && email.trim() !== '') {
+      const emailTrimmed = email.trim();
+      if (updatedPartner.profile.email !== emailTrimmed) {
+        // Check if email already exists
+        const existingPartner = await Partner.findOne({ "profile.email": emailTrimmed, _id: { $ne: id } });
+        if (existingPartner) {
+          return res.status(400).json({
+            success: false,
+            message: "Email already exists."
+          });
+        }
+        updatedPartner.profile.email = emailTrimmed;
       }
-      updatedPartner.profile.email = email.trim();
     }
-    if (phone && updatedPartner.phone !== phone.trim()) {
-      // Check if phone number already exists
-      const existingPartner = await Partner.findOne({ "phone": phone.trim(), _id: { $ne: id } });
-      if (existingPartner) {
-        return res.status(400).json({
-          success: false,
-          message: "Phone number already exists."
-        });
+    if (phone !== undefined && phone.trim() !== '') {
+      const phoneTrimmed = phone.trim();
+      if (updatedPartner.phone !== phoneTrimmed) {
+        // Check if phone number already exists
+        const existingPartner = await Partner.findOne({ "phone": phoneTrimmed, _id: { $ne: id } });
+        if (existingPartner) {
+          return res.status(400).json({
+            success: false,
+            message: "Phone number already exists."
+          });
+        }
+        updatedPartner.phone = phoneTrimmed;
       }
-      updatedPartner.phone = phone.trim();
     }
     if (whatsappNumber !== undefined) {
-      updatedPartner.whatsappNumber = whatsappNumber.trim();
+      updatedPartner.whatsappNumber = whatsappNumber ? whatsappNumber.trim() : '';
     }
     if (qualification !== undefined) {
       updatedPartner.qualification = qualification;
     }
     if (experience !== undefined) {
       updatedPartner.experience = experience ? parseInt(experience) : 0;
+    }
+    if (partnerType !== undefined) {
+      updatedPartner.partnerType = partnerType;
     }
     if (address !== undefined) {
       updatedPartner.profile.address = address;
@@ -1478,7 +1505,6 @@ exports.updatePartnerProfile = async (req, res) => {
     }
     if (gstNumber !== undefined) {
       updatedPartner.profile.gstNumber = gstNumber;
-      updatedPartner.gstNumber = gstNumber; // Also update top-level field
     }
     if (referralCode !== undefined) {
       updatedPartner.referralCode = referralCode;
@@ -1486,22 +1512,29 @@ exports.updatePartnerProfile = async (req, res) => {
     
     // Handle profile image upload
     if (req.file) {
-      // uploadFile2 is already imported at the top of the file from '../middleware/aws'
-      const profileImageUrl = await uploadFile2(req.file, 'partnerdoc')
+      const profileImageUrl = await handleFileUpload(req.file, 'partnerdoc')
       if (profileImageUrl) {
-        if (!updatedPartner.profile) {
-          updatedPartner.profile = {}
-        }
         updatedPartner.profile.profileImage = profileImageUrl
+        updatedPartner.profilePicture = profileImageUrl // Also update top-level field
       }
     }
     
     // Update categories
-    if (categories && Array.isArray(categories)) {
-      updatedPartner.category = categories;
+    if (categories !== undefined) {
+      if (Array.isArray(categories)) {
+        updatedPartner.category = categories;
+      } else if (typeof categories === 'string') {
+        // Handle comma-separated string
+        updatedPartner.category = categories.split(',').map(c => c.trim()).filter(Boolean);
+      }
     }
-    if (categoryNames && Array.isArray(categoryNames)) {
-      updatedPartner.categoryNames = categoryNames;
+    if (categoryNames !== undefined) {
+      if (Array.isArray(categoryNames)) {
+        updatedPartner.categoryNames = categoryNames;
+      } else if (typeof categoryNames === 'string') {
+        // Handle comma-separated string
+        updatedPartner.categoryNames = categoryNames.split(',').map(c => c.trim()).filter(Boolean);
+      }
     }
     
     // Update Bank Details
@@ -1532,23 +1565,70 @@ exports.updatePartnerProfile = async (req, res) => {
       updatedPartner.kyc.remarks = kycRemarks;
     }
     
-    // Update Payment Info
+    // Update Payment Info in profile
     if (registerAmount !== undefined && registerAmount !== '') {
-      updatedPartner.registerAmount = parseFloat(registerAmount) || 0;
+      updatedPartner.profile.registerAmount = parseFloat(registerAmount) || 0;
     }
     if (payId !== undefined) {
-      updatedPartner.payId = payId;
+      updatedPartner.profile.payId = payId;
     }
     if (paidBy !== undefined) {
-      updatedPartner.paidBy = paidBy;
+      updatedPartner.profile.paidBy = paidBy;
+    }
+    if (securityDeposit !== undefined && securityDeposit !== '') {
+      updatedPartner.profile.securityDeposit = parseFloat(securityDeposit) || 0;
+    }
+    if (toolkitPrice !== undefined && toolkitPrice !== '') {
+      updatedPartner.profile.toolkitPrice = parseFloat(toolkitPrice) || 0;
     }
     
     // Update Profile Completion Status
-    if (bodyData.profileCompleted !== undefined) {
-      updatedPartner.profileCompleted = bodyData.profileCompleted === true || bodyData.profileCompleted === 'true';
+    if (profileCompleted !== undefined) {
+      const newProfileCompleted = profileCompleted === true || profileCompleted === 'true';
+      
+      // Validate required fields if setting profileCompleted to true
+      if (newProfileCompleted) {
+        const validationErrors = [];
+        
+        if (!updatedPartner.category || updatedPartner.category.length === 0) {
+          validationErrors.push('At least one category is required when profile is completed');
+        }
+        if (!updatedPartner.profile?.name) {
+          validationErrors.push('Name is required when profile is completed');
+        }
+        if (!updatedPartner.profile?.email) {
+          validationErrors.push('Email is required when profile is completed');
+        }
+        if (!updatedPartner.profile?.address) {
+          validationErrors.push('Address is required when profile is completed');
+        }
+        
+        if (validationErrors.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Cannot mark profile as completed',
+            errors: validationErrors
+          });
+        }
+      }
+      
+      updatedPartner.profileCompleted = newProfileCompleted;
     }
     
+    // Log what's being saved
+    console.log('Saving partner updates:', {
+      id: updatedPartner._id,
+      name: updatedPartner.profile?.name,
+      email: updatedPartner.profile?.email,
+      phone: updatedPartner.phone,
+      categories: updatedPartner.category,
+      categoryNames: updatedPartner.categoryNames,
+      profileCompleted: updatedPartner.profileCompleted
+    });
+    
     await updatedPartner.save();
+    
+    console.log('Partner saved successfully');
     
     // Return a clean response without circular references
     const responseData = {
@@ -1556,15 +1636,38 @@ exports.updatePartnerProfile = async (req, res) => {
       message: "Partner profile updated successfully.",
       data: {
         _id: updatedPartner._id,
-        name: updatedPartner.name,
-        email: updatedPartner.email,
-        phone: updatedPartner.phone
+        name: updatedPartner.profile?.name,
+        email: updatedPartner.profile?.email,
+        phone: updatedPartner.phone,
+        profileCompleted: updatedPartner.profileCompleted
       }
     };
     
     res.status(200).json(responseData);
   } catch (error) {
     console.error("Error updating partner profile:", error);
+    
+    // Handle Mongoose validation errors
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: validationErrors,
+        error: error.message
+      });
+    }
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      return res.status(400).json({
+        success: false,
+        message: `${field} already exists`,
+        error: error.message
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: "Error updating partner profile",

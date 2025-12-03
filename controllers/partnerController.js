@@ -4,7 +4,7 @@ const jwt = require("jsonwebtoken");
 const { sendOTP } = require("../utils/sendOTP");
 const path = require("path");
 const Booking = require("../models/booking");
-const { uploadFile2 } = require("../middleware/aws");
+const { uploadFile2, handleFileUpload } = require("../middleware/aws");
 
 const sendLoginOTP = async (req, res) => {
   try {
@@ -223,7 +223,7 @@ const updateProfile = async (req, res) => {
 
     // Handle profile picture if uploaded
     if (req.file) {
-      partner.profile.profilePicture = await uploadFile2(req.file,"partner");
+      partner.profile.profilePicture = await handleFileUpload(req.file,"partner");
     }
 
     partner.profileCompleted = true;
@@ -304,12 +304,12 @@ const uploadKYCDocuments = async (req, res) => {
     }
 
     const partner = await Partner.findById(req.partner._id);
-   let panCard=  await uploadFile2(req.files.panCard[0],"partnerdoc");
-   let aadhaarCard= await uploadFile2(req.files.aadhaarCard[0],"partnerdoc");
-   let cancelledCheque=await uploadFile2(req.files.cancelledCheque[0],"partnerdoc");
+   let panCard=  await handleFileUpload(req.files.panCard[0],"partnerdoc");
+   let aadhaarCard= await handleFileUpload(req.files.aadhaarCard[0],"partnerdoc");
+   let cancelledCheque=await handleFileUpload(req.files.cancelledCheque[0],"partnerdoc");
 
-   let drivingLicence= await uploadFile2(req.files.drivingLicence[0],"partnerdoc");
-   let bill=await uploadFile2(req.files.bill[0],"partnerdoc");
+   let drivingLicence= await handleFileUpload(req.files.drivingLicence[0],"partnerdoc");
+   let bill=await handleFileUpload(req.files.bill[0],"partnerdoc");
 
 
     // Update KYC documents

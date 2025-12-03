@@ -14,29 +14,24 @@ exports.createHub = async (req, res) => {
       });
     }
 
-    if (!areas || !Array.isArray(areas) || areas.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'At least one area with pin codes is required'
-      });
-    }
-
-    // Validate areas structure
-    for (const area of areas) {
-      if (!area.areaName || !area.pinCodes || !Array.isArray(area.pinCodes) || area.pinCodes.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Each area must have a name and at least one pin code'
-        });
-      }
-
-      // Validate pin codes format (6 digits)
-      for (const pin of area.pinCodes) {
-        if (!/^\d{6}$/.test(pin.trim())) {
+    // Validate areas structure if provided
+    if (areas && Array.isArray(areas) && areas.length > 0) {
+      for (const area of areas) {
+        if (!area.areaName || !area.pinCodes || !Array.isArray(area.pinCodes) || area.pinCodes.length === 0) {
           return res.status(400).json({
             success: false,
-            message: `Invalid pin code format: ${pin}. Pin codes must be 6 digits`
+            message: 'Each area must have a name and at least one pin code'
           });
+        }
+
+        // Validate pin codes format (6 digits)
+        for (const pin of area.pinCodes) {
+          if (!/^\d{6}$/.test(pin.trim())) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid pin code format: ${pin}. Pin codes must be 6 digits`
+            });
+          }
         }
       }
     }
@@ -56,10 +51,10 @@ exports.createHub = async (req, res) => {
       description: description?.trim() || '',
       city: city?.trim() || '',
       state: state?.trim() || '',
-      areas: areas.map(area => ({
+      areas: areas && Array.isArray(areas) ? areas.map(area => ({
         areaName: area.areaName.trim(),
         pinCodes: area.pinCodes.map(pin => pin.trim())
-      })),
+      })) : [],
       status: status || 'active'
     });
 

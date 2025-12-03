@@ -40,13 +40,7 @@ const hubSchema = new mongoose.Schema({
   },
   areas: {
     type: [areaSchema],
-    default: [],
-    validate: {
-      validator: function(areas) {
-        return areas.length > 0;
-      },
-      message: 'Hub must have at least one area'
-    }
+    default: []
   },
   status: {
     type: String,

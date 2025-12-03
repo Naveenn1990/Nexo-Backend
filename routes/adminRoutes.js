@@ -43,6 +43,7 @@ router.get("/users", adminAuth, adminController.getAllUsers);
 
 // Partner management
 router.get("/partners", adminAuth, adminController.getAllPartners);
+router.get("/partners-revenue-stats", adminAuth, adminController.getPartnerRevenueStats);
 
 // Test endpoint to verify route is working
 router.post("/partners/manual-register/test", adminAuth, (req, res) => {
