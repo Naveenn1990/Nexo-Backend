@@ -134,8 +134,13 @@ const uploadFile2 = (file, bucketname) => {
       fs.mkdirSync(bucketDir, { recursive: true });
     }
 
-    // Generate unique filename
-    const filename = `${Date.now()}_${file.originalname}`;
+    // Sanitize filename: remove spaces and special characters, keep only alphanumeric, dots, hyphens, and underscores
+    const sanitizedOriginalName = file.originalname
+      .replace(/\s+/g, '_')  // Replace spaces with underscores
+      .replace(/[^a-zA-Z0-9._-]/g, '');  // Remove special characters except dots, hyphens, underscores
+    
+    // Generate unique filename with sanitized name
+    const filename = `${Date.now()}_${sanitizedOriginalName}`;
     const filePath = path.join(bucketDir, filename);
 
     // Write file to local storage
@@ -226,17 +231,22 @@ const handleFileUpload = async (file, bucketname) => {
   
   // Check if file has buffer (memoryStorage) or path (diskStorage)
   if (file.buffer) {
-    // Using memoryStorage - use uploadFile2 but return only filename
+    // Using memoryStorage - use uploadFile2 and return the full URL
     const fullUrl = await uploadFile2(file, bucketname);
-    // Extract filename from the full URL
-    if (fullUrl && fullUrl.includes('/')) {
-      return fullUrl.split('/').pop(); // Return just the filename
-    }
-    return fullUrl;
+    return fullUrl; // Return the full URL
   } else if (file.path || file.filename) {
-    // Using diskStorage - file is already saved, return just the filename
+    // Using diskStorage - file is already saved, construct and return full URL
     const filename = file.filename || path.basename(file.path);
-    return filename;
+    
+    // Map bucket names to correct subdirectories
+    let subdir = bucketname;
+    if (bucketname === 'partnerdoc' || bucketname === 'kyc') {
+      subdir = 'kyc';
+    } else if (bucketname === 'partner' || bucketname === 'team-member') {
+      subdir = 'profiles';
+    }
+    
+    return `https://nexo.works/uploads/${subdir}/${filename}`;
   }
   
   return null;

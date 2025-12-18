@@ -78,10 +78,22 @@ exports.createMaterialCategory = async (req, res) => {
       });
     }
 
+    // Process items - handle both string and object formats for backward compatibility
+    const processedItems = items.map(item => {
+      if (typeof item === 'string') {
+        return { name: item.trim(), priceMin: null, priceMax: null };
+      }
+      return {
+        name: item.name?.trim() || '',
+        priceMin: item.priceMin ? Number(item.priceMin) : null,
+        priceMax: item.priceMax ? Number(item.priceMax) : null
+      };
+    }).filter(item => item.name !== '');
+
     const category = await MaterialCategory.create({
       name,
       icon,
-      items: items.filter(item => item && item.trim() !== ''), // Filter out empty items
+      items: processedItems,
       order: order || 0,
       isActive: isActive !== undefined ? isActive : true
     });
@@ -115,7 +127,17 @@ exports.updateMaterialCategory = async (req, res) => {
     if (name !== undefined) category.name = name;
     if (icon !== undefined) category.icon = icon;
     if (items !== undefined && Array.isArray(items)) {
-      category.items = items.filter(item => item && item.trim() !== '');
+      // Process items - handle both string and object formats for backward compatibility
+      category.items = items.map(item => {
+        if (typeof item === 'string') {
+          return { name: item.trim(), priceMin: null, priceMax: null };
+        }
+        return {
+          name: item.name?.trim() || '',
+          priceMin: item.priceMin ? Number(item.priceMin) : null,
+          priceMax: item.priceMax ? Number(item.priceMax) : null
+        };
+      }).filter(item => item.name !== '');
     }
     if (order !== undefined) category.order = order;
     if (isActive !== undefined) category.isActive = isActive;

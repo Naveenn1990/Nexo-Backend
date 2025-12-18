@@ -12,8 +12,19 @@ const materialCategorySchema = new mongoose.Schema({
     trim: true
   },
   items: [{
-    type: String,
-    trim: true
+    name: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    priceMin: {
+      type: Number,
+      default: null
+    },
+    priceMax: {
+      type: Number,
+      default: null
+    }
   }],
   order: {
     type: Number,
