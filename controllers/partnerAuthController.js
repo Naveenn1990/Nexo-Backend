@@ -384,17 +384,24 @@ exports.completePaymentVendor = async (req, res) => {
       toolkitPrice
     });
 
-    // Save payment data
-    data.registerAmount = finalRegistrationFee || 0;
-    data.payId = payId || null;
-    data.paidBy = paidBy || null;
-    data.registerdFee = true;
+    // Save payment data to profile object (as per Partner model schema)
+    if (!data.profile) {
+      data.profile = {};
+    }
+    data.profile.registerAmount = finalRegistrationFee || 0;
+    data.profile.securityDeposit = finalSecurityDeposit || 0;
+    data.profile.toolkitPrice = finalToolkitPrice || 0;
+    data.profile.payId = payId || null;
+    data.profile.paidBy = paidBy || null;
+    data.profile.registerdFee = true;
 
-    console.log('Payment data saved to partner:', {
-      registerAmount: data.registerAmount,
-      payId: data.payId,
-      paidBy: data.paidBy,
-      registerdFee: data.registerdFee
+    console.log('Payment data saved to partner profile:', {
+      registerAmount: data.profile.registerAmount,
+      securityDeposit: data.profile.securityDeposit,
+      toolkitPrice: data.profile.toolkitPrice,
+      payId: data.profile.payId,
+      paidBy: data.profile.paidBy,
+      registerdFee: data.profile.registerdFee
     });
     // Save terms data if provided
     if (terms) {

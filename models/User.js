@@ -34,7 +34,8 @@ const userSchema = new mongoose.Schema({
     lat: { type: String },
     lng: { type: String },
     landmark: { type: String, trim: true },
-    addressType: { type: String, trim: true }
+    addressType: { type: String, trim: true },
+    pincode: { type: String, trim: true }
   }],
   tempOTP: String,
   tempOTPExpiry: Date,
@@ -76,6 +77,38 @@ const userSchema = new mongoose.Schema({
     name: String,
     mobile: String
   }],
+  
+  // User type for different service categories
+  userType: {
+    type: String,
+    enum: ['home', 'pg', 'company', 'other'],
+    default: 'home'
+  },
+  
+  // Company-specific fields (only for company users)
+  companyDetails: {
+    companyName: { type: String, trim: true },
+    companySize: { 
+      type: String, 
+      enum: ['', 'small', 'medium', 'large', 'enterprise'],
+      default: ''
+    },
+    industry: { type: String, trim: true },
+    gstNumber: { type: String, trim: true },
+    contactPerson: { type: String, trim: true },
+    designation: { type: String, trim: true }
+  },
+  
+  // AMC Plan subscription (for companies)
+  amcSubscription: {
+    planId: { type: mongoose.Schema.Types.ObjectId, ref: 'AMCPlan' },
+    planName: { type: String },
+    startDate: { type: Date },
+    endDate: { type: Date },
+    isActive: { type: Boolean, default: false },
+    paymentStatus: { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },
+    subscriptionDate: { type: Date, default: Date.now }
+  },
   reviews: [
     {
       partner: { type: mongoose.Schema.Types.ObjectId, ref: "Partner" },
@@ -85,7 +118,31 @@ const userSchema = new mongoose.Schema({
       video: { type: String }, // Optional video field
       createdAt: { type: Date, default: Date.now }
     }
-  ]
+  ],
+  
+  // Payment-related fields
+  pendingPayments: [{
+    txnid: { type: String, required: true },
+    mihpayid: { type: String },
+    amount: { type: Number, required: true },
+    productinfo: { type: String, required: true },
+    status: { type: String, enum: ['initiated', 'success', 'failed'], default: 'initiated' },
+    createdAt: { type: Date, default: Date.now },
+    completedAt: { type: Date }
+  }],
+  
+  // AMC Subscriptions (multiple plans possible)
+  amcSubscriptions: [{
+    planName: { type: String, required: true },
+    amount: { type: Number, required: true },
+    txnid: { type: String, required: true },
+    mihpayid: { type: String },
+    subscribedAt: { type: Date, default: Date.now },
+    status: { type: String, enum: ['active', 'expired', 'cancelled'], default: 'active' },
+    assignedPartner: { type: mongoose.Schema.Types.ObjectId, ref: 'Partner' },
+    assignedPartnerName: { type: String },
+    assignedAt: { type: Date }
+  }]
 }, {
   timestamps: true
 });

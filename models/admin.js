@@ -35,7 +35,7 @@ const adminSchema = new mongoose.Schema(
       read: { type: Boolean, default: false }, // Add read field for consistency with frontend
       date: { type: Date, default: Date.now },
       createdAt: { type: Date, default: Date.now }, // Add createdAt for consistency
-      type: { type: String, enum: ['info', 'alert', 'message', 'job'], default: 'info' }
+      type: { type: String, enum: ['info', 'alert', 'message', 'job', 'success', 'booking_paused', 'booking_resumed'], default: 'info' }
     }], 
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

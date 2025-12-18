@@ -18,6 +18,124 @@ const dayjs = require("dayjs");
 const { PaymentTransaction } = require("../models/RegisterFee");
 const { sendPartnerNotification, sendAdminNotification } = require("../services/notificationService");
 
+// Helper function to create fee transactions for manual approvals
+const createManualApprovalTransactions = async (partner, paymentDetails) => {
+  try {
+    const { registerAmount, securityDeposit, toolkitPrice, payId, paidBy, approvedBy, approvedAt } = paymentDetails;
+    const transactions = [];
+
+    // Create registration fee transaction if amount > 0
+    if (registerAmount > 0) {
+      const registrationTxn = new PaymentTransaction({
+        partnerId: partner._id,
+        feeType: 'registration',
+        amount: registerAmount,
+        status: 'success',
+        paymentMethod: paidBy === 'cash' ? 'cash' : 'manual',
+        transactionId: payId || `MANUAL_REG_${partner._id}_${Date.now()}`,
+        description: `Registration fee - Manual approval by ${approvedBy}`,
+        source: 'admin',
+        metadata: {
+          source: 'admin',
+          partnerName: partner.profile?.name || 'Unknown',
+          partnerPhone: partner.phone,
+          partnerEmail: partner.profile?.email,
+          manualApproval: true,
+          approvedBy: approvedBy,
+          approvedAt: approvedAt,
+          paymentMethod: paidBy,
+          originalPayId: payId,
+          priceBreakdown: {
+            registrationFee: registerAmount,
+            securityDeposit: securityDeposit,
+            toolkitPrice: toolkitPrice,
+            totalAmount: registerAmount + securityDeposit + toolkitPrice
+          }
+        },
+        createdAt: approvedAt
+      });
+      transactions.push(registrationTxn);
+    }
+
+    // Create security deposit transaction if amount > 0
+    if (securityDeposit > 0) {
+      const securityTxn = new PaymentTransaction({
+        partnerId: partner._id,
+        feeType: 'security_deposit',
+        amount: securityDeposit,
+        status: 'success',
+        paymentMethod: paidBy === 'cash' ? 'cash' : 'manual',
+        transactionId: payId || `MANUAL_SEC_${partner._id}_${Date.now()}`,
+        description: `Security deposit - Manual approval by ${approvedBy}`,
+        source: 'admin',
+        metadata: {
+          source: 'admin',
+          partnerName: partner.profile?.name || 'Unknown',
+          partnerPhone: partner.phone,
+          partnerEmail: partner.profile?.email,
+          manualApproval: true,
+          approvedBy: approvedBy,
+          approvedAt: approvedAt,
+          paymentMethod: paidBy,
+          originalPayId: payId,
+          priceBreakdown: {
+            registrationFee: registerAmount,
+            securityDeposit: securityDeposit,
+            toolkitPrice: toolkitPrice,
+            totalAmount: registerAmount + securityDeposit + toolkitPrice
+          }
+        },
+        createdAt: approvedAt
+      });
+      transactions.push(securityTxn);
+    }
+
+    // Create toolkit transaction if amount > 0
+    if (toolkitPrice > 0) {
+      const toolkitTxn = new PaymentTransaction({
+        partnerId: partner._id,
+        feeType: 'toolkit',
+        amount: toolkitPrice,
+        status: 'success',
+        paymentMethod: paidBy === 'cash' ? 'cash' : 'manual',
+        transactionId: payId || `MANUAL_TK_${partner._id}_${Date.now()}`,
+        description: `Toolkit fee - Manual approval by ${approvedBy}`,
+        source: 'admin',
+        metadata: {
+          source: 'admin',
+          partnerName: partner.profile?.name || 'Unknown',
+          partnerPhone: partner.phone,
+          partnerEmail: partner.profile?.email,
+          manualApproval: true,
+          approvedBy: approvedBy,
+          approvedAt: approvedAt,
+          paymentMethod: paidBy,
+          originalPayId: payId,
+          priceBreakdown: {
+            registrationFee: registerAmount,
+            securityDeposit: securityDeposit,
+            toolkitPrice: toolkitPrice,
+            totalAmount: registerAmount + securityDeposit + toolkitPrice
+          }
+        },
+        createdAt: approvedAt
+      });
+      transactions.push(toolkitTxn);
+    }
+
+    // Save all transactions
+    if (transactions.length > 0) {
+      await PaymentTransaction.insertMany(transactions);
+      console.log(`✅ Created ${transactions.length} manual approval transactions for partner ${partner._id}`);
+    }
+
+    return transactions;
+  } catch (error) {
+    console.error('Error creating manual approval transactions:', error);
+    throw error;
+  }
+};
+
 
 
 exports.loginAdmin = async (req, res) => {
@@ -894,9 +1012,11 @@ exports.getAllPartners = async (req, res) => {
             totalEarnings,
             transactions,
           },
-          registerAmount: partner.registerAmount || 0,
-          payId: partner.payId || "N/A",
-          paidBy: partner.paidBy || "N/A",
+          registerAmount: partner.profile?.registerAmount || 0,
+          securityDeposit: partner.profile?.securityDeposit || 0,
+          toolkitPrice: partner.profile?.toolkitPrice || 0,
+          payId: partner.profile?.payId || "N/A",
+          paidBy: partner.profile?.paidBy || "N/A",
           mgPlan: partner.mgPlan || null,
           mgPlanLeadQuota: partner.mgPlanLeadQuota || 0,
           mgPlanLeadsUsed: partner.mgPlanLeadsUsed || 0,
@@ -923,35 +1043,44 @@ exports.getAllPartners = async (req, res) => {
 // Get partner revenue statistics
 exports.getPartnerRevenueStats = async (req, res) => {
   try {
-    // Calculate total registration fees from PaymentTransaction collection
+    // Get only approved partners for revenue calculation
+    const approvedPartners = await Partner.find({
+      'kyc.status': 'approved'
+    }).select('profile.securityDeposit profile.toolkitPrice profile.registerAmount mgPlanHistory _id')
+      .lean();
+
+    // Get approved partner IDs for filtering transactions
+    const approvedPartnerIds = approvedPartners.map(partner => partner._id);
+
+    // Calculate total registration fees from PaymentTransaction collection - only for approved partners
     const registrationTransactions = await PaymentTransaction.find({
       feeType: 'registration',
-      status: 'success'
+      status: 'success',
+      partnerId: { $in: approvedPartnerIds }
     }).lean();
     
     const totalRegistrationFees = registrationTransactions.reduce((sum, txn) => {
       return sum + (txn.amount || 0);
     }, 0);
 
-    // Get all partners for security deposit, toolkit, and MG Plan revenue calculation
-    const allPartners = await Partner.find({})
-      .select('securityDeposit toolkitPrice mgPlanHistory')
-      .lean();
+    // Use approved partners for security deposit, toolkit, and MG Plan revenue calculation
+    const allPartners = approvedPartners;
 
     // Calculate total security deposit fees from Partner model
     let totalSecurityDepositFromPartners = allPartners.reduce((sum, partner) => {
-      return sum + (partner.securityDeposit || 0);
+      return sum + (partner.profile?.securityDeposit || 0);
     }, 0);
 
     // Calculate total toolkit fees from Partner model
     let totalToolkitFromPartners = allPartners.reduce((sum, partner) => {
-      return sum + (partner.toolkitPrice || 0);
+      return sum + (partner.profile?.toolkitPrice || 0);
     }, 0);
 
     // Also check PaymentTransaction metadata for security deposit and toolkit
-    // (in case they're stored there instead of Partner model)
+    // (in case they're stored there instead of Partner model) - only for approved partners
     const allTransactions = await PaymentTransaction.find({
-      status: 'success'
+      status: 'success',
+      partnerId: { $in: approvedPartnerIds }
     }).lean();
 
     let totalSecurityDepositFromTransactions = 0;
@@ -984,8 +1113,11 @@ exports.getPartnerRevenueStats = async (req, res) => {
       return sum;
     }, 0);
 
-    // Calculate total partner earnings from completed bookings
-    const completedBookings = await booking.find({ status: "completed" })
+    // Calculate total partner earnings from completed bookings - only for approved partners
+    const completedBookings = await booking.find({ 
+      status: "completed",
+      partner: { $in: approvedPartnerIds }
+    })
       .populate('subService', 'commission')
       .lean();
 
@@ -2059,6 +2191,7 @@ exports.getAllFeeTransactions = async (req, res) => {
       limit = 50, 
       feeType, 
       status, 
+      source, // 'all', 'partner', 'user', 'admin'
       startDate, 
       endDate,
       partnerId 
@@ -2068,162 +2201,236 @@ exports.getAllFeeTransactions = async (req, res) => {
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Build query
-    const query = {};
+    // Determine which sources to fetch
+    const fetchPartner = !source || source === 'all' || source === 'partner' || source === 'manual_approval';
+    const fetchUser = !source || source === 'all' || source === 'user';
 
-    // Filter by feeType - ensure exact match and valid value
-    if (feeType && feeType !== 'all' && feeType.trim() !== '') {
-      const trimmedFeeType = feeType.trim();
-      const validFeeTypes = ['registration', 'security_deposit', 'toolkit', 'mg_plan', 'lead_fee', 'other'];
-      if (validFeeTypes.includes(trimmedFeeType)) {
-        // Special logic for toolkit and security_deposit: check both feeType and priceBreakdown
-        if (trimmedFeeType === 'toolkit' || trimmedFeeType === 'security_deposit') {
-          // Use $or to check both feeType field and priceBreakdown in metadata
-          query.$or = [
-            { feeType: trimmedFeeType },
-            { [`metadata.priceBreakdown.${trimmedFeeType === 'security_deposit' ? 'securityDeposit' : 'toolkitPrice'}`]: { $exists: true, $gt: 0 } }
-          ];
-          // Debug logging
-          if (process.env.NODE_ENV === 'development') {
-            console.log('Applying feeType filter with priceBreakdown check:', trimmedFeeType);
-          }
-        } else {
-          // For other fee types, use standard feeType filter
-          query.feeType = trimmedFeeType;
-          // Debug logging
-          if (process.env.NODE_ENV === 'development') {
-            console.log('Applying feeType filter:', trimmedFeeType);
-          }
-        }
-      } else {
-        // Debug logging for invalid feeType
-        if (process.env.NODE_ENV === 'development') {
-          console.log('Invalid feeType received:', trimmedFeeType, 'Valid types:', validFeeTypes);
-        }
-      }
-    }
+    let allTransactions = [];
 
-    // Filter by status - ensure exact match and valid value
-    if (status && status !== 'all' && status.trim() !== '') {
-      const validStatuses = ['pending', 'success', 'failed', 'refunded'];
-      if (validStatuses.includes(status.trim())) {
-        query.status = status.trim();
-      }
-    }
-
-    // Filter by partnerId
-    if (partnerId && partnerId.trim() !== '') {
-      query.partnerId = partnerId.trim();
-    }
-
+    // Build date filter (common for both)
+    const dateFilter = {};
     if (startDate || endDate) {
-      query.createdAt = {};
       if (startDate) {
-        // Set to start of the day (00:00:00) in local timezone
         const start = new Date(startDate + 'T00:00:00');
-        query.createdAt.$gte = start;
+        dateFilter.$gte = start;
       }
       if (endDate) {
-        // Set to end of the day (23:59:59.999) in local timezone
         const end = new Date(endDate + 'T23:59:59.999');
-        query.createdAt.$lte = end;
+        dateFilter.$lte = end;
+      }
+    }
+
+    // Fetch Partner Transactions
+    if (fetchPartner) {
+      const partnerQuery = {};
+
+      // Filter by feeType
+      if (feeType && feeType !== 'all' && feeType.trim() !== '') {
+        const trimmedFeeType = feeType.trim();
+        const validFeeTypes = ['registration', 'security_deposit', 'toolkit', 'mg_plan', 'lead_fee', 'other'];
+        if (validFeeTypes.includes(trimmedFeeType)) {
+          if (trimmedFeeType === 'toolkit' || trimmedFeeType === 'security_deposit') {
+            partnerQuery.$or = [
+              { feeType: trimmedFeeType },
+              { [`metadata.priceBreakdown.${trimmedFeeType === 'security_deposit' ? 'securityDeposit' : 'toolkitPrice'}`]: { $exists: true, $gt: 0 } }
+            ];
+          } else {
+            partnerQuery.feeType = trimmedFeeType;
+          }
+        }
+      }
+
+      // Filter by status
+      if (status && status !== 'all' && status.trim() !== '') {
+        const validStatuses = ['pending', 'success', 'failed', 'refunded'];
+        if (validStatuses.includes(status.trim())) {
+          partnerQuery.status = status.trim();
+        }
+      }
+
+      // Filter by partnerId
+      if (partnerId && partnerId.trim() !== '') {
+        partnerQuery.partnerId = partnerId.trim();
+      }
+
+      // Date filter
+      if (Object.keys(dateFilter).length > 0) {
+        partnerQuery.createdAt = dateFilter;
+      }
+
+      // Filter for manual approvals only
+      if (source === 'manual_approval') {
+        partnerQuery['metadata.manualApproval'] = true;
+      }
+
+      const partnerTransactions = await PaymentTransaction.find(partnerQuery)
+        .sort({ createdAt: -1 })
+        .lean();
+
+      // Add source field and populate partner info
+      for (const txn of partnerTransactions) {
+        try {
+          const partner = await Partner.findById(txn.partnerId).select('phone profile.name profile.email').lean();
+          txn.source = 'partner';
+          txn.partner = {
+            name: partner?.profile?.name || partner?.name || 'Unknown',
+            phone: partner?.phone || txn.partnerId,
+            email: partner?.profile?.email || partner?.email || ''
+          };
+        } catch (err) {
+          txn.source = 'partner';
+          txn.partner = {
+            name: txn.metadata?.partnerName || 'Unknown',
+            phone: txn.partnerId,
+            email: txn.metadata?.partnerEmail || ''
+          };
+        }
+      }
+
+      allTransactions.push(...partnerTransactions);
+    }
+
+    // Fetch User Transactions (from User model's pendingPayments and amcSubscriptions)
+    if (fetchUser) {
+      const User = require('../models/User');
+      
+      // Build user query
+      const userQuery = {};
+      if (Object.keys(dateFilter).length > 0) {
+        userQuery.$or = [
+          { 'pendingPayments.createdAt': dateFilter },
+          { 'amcSubscriptions.subscribedAt': dateFilter }
+        ];
+      }
+
+      const users = await User.find({
+        $or: [
+          { 'pendingPayments': { $exists: true, $ne: [] } },
+          { 'amcSubscriptions': { $exists: true, $ne: [] } }
+        ]
+      })
+      .select('name email phone pendingPayments amcSubscriptions')
+      .lean();
+
+      // Process user payments
+      for (const user of users) {
+        // Process pending payments
+        if (user.pendingPayments && Array.isArray(user.pendingPayments)) {
+          for (const payment of user.pendingPayments) {
+            // Apply filters
+            if (status && status !== 'all' && payment.status !== status) continue;
+            if (feeType && feeType !== 'all') {
+              // Check if productinfo matches feeType
+              const productInfo = (payment.productinfo || '').toLowerCase();
+              if (feeType === 'amc_plan' && !productInfo.includes('amc')) continue;
+              if (feeType === 'subscription' && !productInfo.includes('subscription')) continue;
+              if (feeType === 'wallet_recharge' && !productInfo.includes('wallet')) continue;
+            }
+
+            // Determine fee type from productinfo
+            let determinedFeeType = 'other';
+            const productInfo = (payment.productinfo || '').toLowerCase();
+            if (productInfo.includes('amc')) determinedFeeType = 'amc_plan';
+            else if (productInfo.includes('subscription')) determinedFeeType = 'subscription';
+            else if (productInfo.includes('wallet')) determinedFeeType = 'wallet_recharge';
+
+            allTransactions.push({
+              _id: payment._id || `${user._id}_${payment.txnid}`,
+              source: 'user',
+              feeType: determinedFeeType,
+              amount: payment.amount || 0,
+              status: payment.status || 'pending',
+              transactionId: payment.txnid,
+              paymentMethod: payment.mihpayid ? 'payu' : 'unknown',
+              description: payment.productinfo || 'User Payment',
+              createdAt: payment.createdAt || new Date(),
+              userId: user._id,
+              user: {
+                name: user.name,
+                phone: user.phone,
+                email: user.email
+              },
+              metadata: {
+                source: 'user',
+                userName: user.name,
+                userPhone: user.phone,
+                userEmail: user.email,
+                mihpayid: payment.mihpayid
+              }
+            });
+          }
+        }
+
+        // Process AMC subscriptions
+        if (user.amcSubscriptions && Array.isArray(user.amcSubscriptions)) {
+          for (const subscription of user.amcSubscriptions) {
+            // Apply filters
+            if (status && status !== 'all' && subscription.status !== status) continue;
+            if (feeType && feeType !== 'all' && feeType !== 'amc_plan') continue;
+
+            allTransactions.push({
+              _id: subscription._id || `${user._id}_${subscription.txnid}`,
+              source: 'user',
+              feeType: 'amc_plan',
+              amount: subscription.amount || 0,
+              status: subscription.status || 'active',
+              transactionId: subscription.txnid,
+              paymentMethod: subscription.mihpayid ? 'payu' : 'unknown',
+              description: `${subscription.planName} - AMC Subscription`,
+              createdAt: subscription.subscribedAt || new Date(),
+              userId: user._id,
+              user: {
+                name: user.name,
+                phone: user.phone,
+                email: user.email
+              },
+              metadata: {
+                source: 'user',
+                userName: user.name,
+                userPhone: user.phone,
+                userEmail: user.email,
+                planName: subscription.planName,
+                mihpayid: subscription.mihpayid
+              }
+            });
+          }
+        }
       }
     }
     
-    // Debug logging (can be removed in production)
-    if (process.env.NODE_ENV === 'development') {
-      console.log('Fee Transactions Query:', JSON.stringify(query, null, 2));
-    }
+    // Sort all transactions by date (newest first)
+    allTransactions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    // Get total count
-    const total = await PaymentTransaction.countDocuments(query);
+    // Calculate total count
+    const total = allTransactions.length;
 
-    // Get transactions with partner details
-    // Use find with explicit query to ensure filters are applied correctly
-    const transactions = await PaymentTransaction.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .lean();
-
-    // Debug: Log the actual results
-    if (process.env.NODE_ENV === 'development' && (query.feeType || query.$or)) {
-      const filterType = query.feeType || (query.$or ? 'priceBreakdown check' : 'unknown');
-      console.log(`Found ${transactions.length} transactions with filter: ${filterType}`);
-      if (transactions.length > 0) {
-        console.log('Sample transaction feeTypes:', transactions.slice(0, 3).map(t => t.feeType));
-        if (query.$or) {
-          console.log('Sample priceBreakdowns:', transactions.slice(0, 3).map(t => ({
-            feeType: t.feeType,
-            hasSecurityDeposit: t.metadata?.priceBreakdown?.securityDeposit > 0,
-            hasToolkit: t.metadata?.priceBreakdown?.toolkitPrice > 0
-          })));
-        }
-      } else {
-        console.log('No transactions found with filter:', filterType);
-      }
-    }
-
-    // Populate partner information
-    const transactionsWithPartner = await Promise.all(
-      transactions.map(async (txn) => {
-        try {
-          const partner = await Partner.findById(txn.partnerId).select('phone profile.name profile.email').lean();
-          const partnerName = partner?.profile?.name || partner?.name || 'Unknown';
-          const partnerPhone = partner?.phone || txn.partnerId;
-          const partnerEmail = partner?.profile?.email || partner?.email || '';
-          
-          return {
-            ...txn,
-            partner: {
-              name: partnerName,
-              phone: partnerPhone,
-              email: partnerEmail
-            }
-          };
-        } catch (err) {
-          // Try to get name from metadata if available
-          const partnerName = txn.metadata?.partnerName || 'Unknown';
-          return {
-            ...txn,
-            partner: {
-              name: partnerName,
-              phone: txn.partnerId,
-              email: txn.metadata?.partnerEmail || ''
-            }
-          };
-        }
-      })
-    );
+    // Apply pagination
+    const paginatedTransactions = allTransactions.slice(skip, skip + limitNum);
 
     // Calculate summary statistics
-    const summary = await PaymentTransaction.aggregate([
-      { $match: query },
-      {
-        $group: {
-          _id: null,
-          totalAmount: { $sum: '$amount' },
-          totalCount: { $sum: 1 },
-          successCount: {
-            $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] }
-          },
-          successAmount: {
-            $sum: { $cond: [{ $eq: ['$status', 'success'] }, '$amount', 0] }
-          }
-        }
-      }
-    ]);
-
-    const stats = summary[0] || {
+    const stats = {
       totalAmount: 0,
-      totalCount: 0,
+      totalCount: allTransactions.length,
       successCount: 0,
-      successAmount: 0
+      successAmount: 0,
+      failedCount: 0
     };
+
+    allTransactions.forEach(txn => {
+      stats.totalAmount += txn.amount || 0;
+      if (txn.status === 'success' || txn.status === 'active') {
+        stats.successCount += 1;
+        stats.successAmount += txn.amount || 0;
+      } else if (txn.status === 'failed') {
+        stats.failedCount += 1;
+      }
+    });
+
+    console.log(`✅ Fetched ${allTransactions.length} total transactions (${stats.successCount} successful)`);
 
     res.json({
       success: true,
-      data: transactionsWithPartner,
+      data: paginatedTransactions,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -2235,7 +2442,7 @@ exports.getAllFeeTransactions = async (req, res) => {
         totalCount: stats.totalCount,
         successCount: stats.successCount,
         successAmount: stats.successAmount,
-        failedCount: stats.totalCount - stats.successCount
+        failedCount: stats.failedCount
       }
     });
   } catch (error) {
@@ -2333,6 +2540,17 @@ exports.approvePartnerPayment = async (req, res) => {
       registerdFee: partner.get('profile.registerdFee')
     });
     
+    // Create fee transaction records for manual approval
+    await createManualApprovalTransactions(partner, {
+      registerAmount: registerAmount || partner.profile?.registerAmount || 0,
+      securityDeposit: partner.profile?.securityDeposit || 0,
+      toolkitPrice: partner.profile?.toolkitPrice || 0,
+      payId: payId || partner.profile?.payId,
+      paidBy: paidBy || partner.profile?.paidBy,
+      approvedBy: approvedBy || 'Admin',
+      approvedAt: approvedAt || new Date()
+    });
+    
     // Verify by fetching fresh from DB
     const verifyPartner = await Partner.findById(partnerId);
     console.log("Verification from DB:", {
@@ -2345,9 +2563,9 @@ exports.approvePartnerPayment = async (req, res) => {
 
     // Send notification to partner about payment approval
     const { sendPartnerNotification } = require("../services/notificationService");
-    const totalAmount = (registerAmount || partner.registerAmount || 0) +
-                       (partner.securityDeposit || 0) +
-                       (partner.toolkitPrice || 0);
+    const totalAmount = (registerAmount || partner.profile?.registerAmount || 0) +
+                       (partner.profile?.securityDeposit || 0) +
+                       (partner.profile?.toolkitPrice || 0);
 
     await sendPartnerNotification(
       partner._id,
@@ -2754,5 +2972,94 @@ exports.manualPartnerRegistration = async (req, res) => {
     } else {
       console.error("Headers already sent, cannot send error response");
     }
+  }
+};
+
+// Get all customers
+exports.getAllCustomers = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || '';
+    const status = req.query.status || '';
+
+    // Build search query
+    const query = {};
+    
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    if (status) {
+      query.status = status;
+    }
+
+    // Get total count
+    const total = await User.countDocuments(query);
+
+    // Fetch customers with pagination
+    const customers = await User.find(query)
+      .select('-password -tempOTP -tempOTPExpiry')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .skip((page - 1) * limit)
+      .lean();
+
+    // Get booking stats for each customer
+    const customersWithStats = await Promise.all(
+      customers.map(async (customer) => {
+        const bookings = await booking.find({ user: customer._id });
+        const totalBookings = bookings.length;
+        const totalSpent = bookings
+          .filter(b => b.status === 'completed')
+          .reduce((sum, b) => sum + (b.amount || 0), 0);
+
+        // Get current address (selected address or first address)
+        let currentAddress = null;
+        if (customer.addresses && customer.addresses.length > 0) {
+          if (customer.selectedAddress) {
+            // Find the selected address
+            currentAddress = customer.addresses.find(addr => addr._id.toString() === customer.selectedAddress);
+          }
+          // If no selected address or not found, use the first address
+          if (!currentAddress) {
+            currentAddress = customer.addresses[0];
+          }
+        }
+
+        return {
+          ...customer,
+          totalBookings,
+          totalSpent,
+          status: customer.status || 'active',
+          currentAddress: currentAddress ? {
+            address: currentAddress.address,
+            landmark: currentAddress.landmark,
+            addressType: currentAddress.addressType,
+            pincode: currentAddress.pincode
+          } : null
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      customers: customersWithStats,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    });
+  } catch (error) {
+    console.error('Get Customers Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching customers',
+      error: error.message
+    });
   }
 };

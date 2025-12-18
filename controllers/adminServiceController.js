@@ -1512,7 +1512,7 @@ exports.updatePartnerProfile = async (req, res) => {
     
     // Handle profile image upload
     if (req.file) {
-      const profileImageUrl = await handleFileUpload(req.file, 'partnerdoc')
+      const profileImageUrl = await handleFileUpload(req.file, 'partner')
       if (profileImageUrl) {
         updatedPartner.profile.profileImage = profileImageUrl
         updatedPartner.profilePicture = profileImageUrl // Also update top-level field

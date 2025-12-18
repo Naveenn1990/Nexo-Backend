@@ -21,8 +21,22 @@ const bookingSchema = new mongoose.Schema(
     subService: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "SubService",
-      required: true
+      required: false  // Made optional for service bookings
     },
+    // New fields for service booking flow
+    serviceName: { type: String },
+    serviceData: { type: mongoose.Schema.Types.Mixed },
+    cartItems: [{ type: mongoose.Schema.Types.Mixed }],
+    customerDetails: {
+      name: String,
+      email: String,
+      phone: String
+    },
+    specialInstructions: { type: String },
+    gstAmount: { type: Number, default: 0 },
+    totalAmount: { type: Number },
+    txnid: { type: String },
+    paymentDetails: { type: mongoose.Schema.Types.Mixed },
     service: { type: mongoose.Schema.Types.ObjectId, ref: "Service" },
     subCategory: { type: mongoose.Schema.Types.ObjectId, ref: "SubCategory" },
     category: { type: mongoose.Schema.Types.ObjectId, ref: "ServiceCategory" },

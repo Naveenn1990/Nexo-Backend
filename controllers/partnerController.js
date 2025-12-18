@@ -223,7 +223,7 @@ const updateProfile = async (req, res) => {
 
     // Handle profile picture if uploaded
     if (req.file) {
-      partner.profile.profilePicture = await handleFileUpload(req.file,"partner");
+      partner.profilePicture = await handleFileUpload(req.file,"partner");
     }
 
     partner.profileCompleted = true;

@@ -39,6 +39,14 @@ const getNotifications = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
+    // Check if notifications array exists, if not initialize it
+    if (!user.notifications || !Array.isArray(user.notifications)) {
+      return res.json({ 
+        success: true, 
+        notifications: [] 
+      });
+    }
+
     // Format notifications to include title if not present
     const formattedNotifications = user.notifications.map(notif => {
       // If message contains title (format: "Title: Message"), split it

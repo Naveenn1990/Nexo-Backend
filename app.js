@@ -724,7 +724,7 @@ connectDB()
 //   })
 // );
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Static file serving moved to after routes and before catch-all route
 
 // Configure helmet with necessary adjustments
 // app.use(
@@ -795,6 +795,9 @@ const hubRoutes = require('./routes/hubRoutes');
 const vendorRoutes = require('./routes/vendorRoutes');
 const whatsappRoutes = require('./routes/whatsappRoutes');
 const payuRoutes = require('./routes/payuRoutes');
+const serviceBookingRoutes = require('./routes/serviceBookingRoutes');
+const amcRoutes = require('./routes/amcRoutes');
+const cityRoutes = require('./routes/cityRoutes');
 // Initialize Firebase Admin
 try {
   // Check if Firebase is already initialized
@@ -843,6 +846,32 @@ app.use('/api/admin/hubs', hubRoutes);
 app.use('/api/vendor', vendorRoutes);
 app.use('/api/admin/whatsapp', whatsappRoutes);
 app.use('/api/payu', payuRoutes);
+
+// User Wallet Payment Routes
+const userWalletRoutes = require('./routes/userWalletRoutes');
+app.use('/api/user/wallet', userWalletRoutes);
+
+// User Payment Routes (PayU integration for AMC, services, etc.)
+const userPaymentRoutes = require('./routes/userPaymentRoutes');
+app.use('/api/user-payment', userPaymentRoutes);
+
+// Service Booking Routes
+app.use('/api/user', serviceBookingRoutes);
+
+// User Subscription Routes
+const userSubscriptionRoutes = require('./routes/userSubscriptionRoutes');
+app.use('/api/user/subscription', userSubscriptionRoutes);
+
+// AMC Routes (public access)
+app.use('/api', amcRoutes);
+
+// City Routes
+app.use('/api/cities', cityRoutes);
+
+// Customer Booking Routes (Admin)
+const customerBookingRoutes = require('./routes/customerBookingRoutes');
+app.use('/api/admin/customer-bookings', customerBookingRoutes);
+
 // Add this route to your backend
 app.post('/api/admin/proxy-image', async (req, res) => {
   try {
@@ -857,10 +886,18 @@ app.post('/api/admin/proxy-image', async (req, res) => {
 
 app.get("/admin/bookings", adminBookingController.getAllBookings);
 
+// Serve static files for the frontend build
 app.use(express.static(path.join(__dirname, 'build'))); // Change 'build' to your frontend folder if needed
 
-// Redirect all requests to the index.html file
+// Serve uploads directory with proper headers (ensure this comes before catch-all route)
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+  next();
+}, express.static(path.join(__dirname, 'uploads')));
 
+// Redirect all requests to the index.html file (catch-all route - must be last)
 app.get("*", (req, res) => {
   return res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });

@@ -34,7 +34,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['info', 'alert', 'message', 'job', 'success'], // Added 'success' for status updates
+      enum: ['info', 'alert', 'message', 'job', 'success', 'booking_paused', 'booking_resumed'], // Added booking status types
       default: 'info',
     },
     icon: {

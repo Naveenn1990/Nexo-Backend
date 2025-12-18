@@ -180,7 +180,7 @@ exports.paymentSuccess = async (req, res) => {
 
       if (!isValid) {
         console.error('❌ Invalid payment hash - Hash verification failed');
-        return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/partner/onboard?payment=failed&reason=invalid_hash`);
+        return res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/partner/onboard?payment=failed&reason=invalid_hash`);
       }
       
       console.log('✅ Hash verification passed');
@@ -191,13 +191,13 @@ exports.paymentSuccess = async (req, res) => {
 
     // Redirect based on status
     if (status === 'success') {
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/partner/onboard?payment=success&txnid=${txnid}&payid=${mihpayid}`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/partner/onboard?payment=success&txnid=${txnid}&payid=${mihpayid}`);
     } else {
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/partner/onboard?payment=failed&reason=payment_failed`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/partner/onboard?payment=failed&reason=payment_failed`);
     }
   } catch (error) {
     console.error('❌ Payment callback handler error:', error);
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/partner/onboard?payment=failed&reason=server_error`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/partner/onboard?payment=failed&reason=server_error`);
   }
 };
 

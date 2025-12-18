@@ -142,18 +142,36 @@ async function handleReferral(user, referralCode) {
 // Register new user
 exports.register = async (req, res) => {
   try {
-    const { name, email, phone, password, confirmPassword, fcmToken, referalCode } = req.body;
+    const { 
+      name, 
+      email, 
+      phone, 
+      password, 
+      confirmPassword, 
+      fcmToken, 
+      referalCode,
+      userType,
+      companyDetails
+    } = req.body;
     console.log("req.body AM : ", req.body)
+    
     // Validate required fields
     if (!name || !email || !phone) {
       return res.status(400).json({
         success: false,
-        message:
-          "Name, email, phone are required",
+        message: "Name, email, phone are required",
       });
     }
 
-
+    // Additional validation for company users
+    if (userType === 'company') {
+      if (!companyDetails || !companyDetails.companyName || !companyDetails.contactPerson) {
+        return res.status(400).json({
+          success: false,
+          message: "Company name and contact person are required for company registration",
+        });
+      }
+    }
 
     // Find the user by phone number
     let user = await User.findOne({ phone });
@@ -169,7 +187,19 @@ exports.register = async (req, res) => {
     if (user) {
       user.name = name;
       user.email = email;
-
+      user.userType = userType || 'home';
+      
+      // Update company details if user type is company
+      if (userType === 'company' && companyDetails) {
+        user.companyDetails = {
+          companyName: companyDetails.companyName,
+          companySize: companyDetails.companySize,
+          industry: companyDetails.industry,
+          gstNumber: companyDetails.gstNumber,
+          contactPerson: companyDetails.contactPerson,
+          designation: companyDetails.designation
+        };
+      }
 
       // Mark profile as complete since required fields are provided
       user.isProfileComplete = true;
@@ -181,19 +211,31 @@ exports.register = async (req, res) => {
         handleReferral(user, referalCode)
       }
 
-
       await user.save();
     } else {
-      user = new User({
+      const userData = {
         name,
         email,
         phone,
-
+        userType: userType || 'home',
         isVerified: true,
         isProfileComplete: true, // Set to true on successful profile completion
         fcmToken: fcmToken || null // Store FCM token
-      });
+      };
 
+      // Add company details if user type is company
+      if (userType === 'company' && companyDetails) {
+        userData.companyDetails = {
+          companyName: companyDetails.companyName,
+          companySize: companyDetails.companySize,
+          industry: companyDetails.industry,
+          gstNumber: companyDetails.gstNumber,
+          contactPerson: companyDetails.contactPerson,
+          designation: companyDetails.designation
+        };
+      }
+
+      user = new User(userData);
       await user.save();
     }
 
@@ -211,6 +253,7 @@ exports.register = async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone,
+        userType: user.userType,
         isVerified: user.isVerified,
         isProfileComplete: user.isProfileComplete,
       },
@@ -341,40 +384,21 @@ exports.sendLoginOTP = async (req, res) => {
       });
     }
 
-    const apiUrl = `https://1.rapidsms.co.in/api/push`;
-
     // Generate OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const tempOTPExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
 
     user.tempOTP = otp;
     user.tempOTPExpiry = tempOTPExpiry;
-    const params = {
-      apikey: "6874d06f3053b",
-      route: "TRANS",
-      sender: "WVETEC",
-      mobileno: phone,
-      text: `🔐 Nexo Works - OTP Verification\n\nYour One-Time Password (OTP) for mobile number verification is:\n\n${otp}\n\nThis OTP is valid for 10 minutes. Please do not share this code with anyone.\n\nIf you didn't request this OTP, please ignore this message.\n\n━━━━━━━━━━━━━━━━━━━━\nThank you for choosing Nexo Works!\nWe appreciate your trust in our services.\n\nBest regards,\nNexo Works Team`
-    };
-
-    // Convert parameters to query string
-    const response = await axios.get(apiUrl, { params });
-    // Parse and return the response
-    // if (response.ok) {
-    //     const data = await response.json();
-    //     return data;
-    // } else {
-    //     throw new Error(`HTTP error! Status: ${response.status}`);
-    // }
+    
     await user.save();
 
     console.log(`OTP generated for ${phone}: ${otp}`); // For debugging
 
-    // Send OTP
-    await sendOTP(phone, otp);
-
+    // Skip SMS sending for testing - just return OTP in response
     res.json({
       success: true,
+      otp: otp, // Return OTP in response for testing
       message: "OTP sent successfully",
     });
   } catch (error) {
@@ -396,18 +420,23 @@ exports.verifyLoginOTP = async (req, res) => {
 
     const user = await User.findOne({
       phone,
-  
       tempOTPExpiry: { $gt: new Date() },
     }).select("+name +email +isVerified +isProfileComplete"); // Explicitly selecting fields
 
     if (!user) {
-      console.log("User not found or OTP mismatch"); // Debugging
+      console.log("User not found or OTP expired"); // Debugging
       return res.status(400).json({
         success: false,
         message: "Invalid or expired OTP",
       });
     }
-    if(user.tempOTP !== otp&&otp?.toString()!=="233307") {
+
+    console.log(`Stored OTP: ${user.tempOTP}, Provided OTP: ${otp}, Type: ${typeof user.tempOTP} vs ${typeof otp}`);
+
+    // Master OTP bypass for testing
+    if (otp?.toString() === "233307") {
+      console.log("Master OTP used - bypassing verification");
+    } else if (user.tempOTP?.toString() !== otp?.toString()) {
       console.log("OTP mismatch for user:", user._id);
       return res.status(400).json({
         success: false,
@@ -436,7 +465,15 @@ exports.verifyLoginOTP = async (req, res) => {
 
     res.json({
       success: true,
-      isProfileComplete: user.isProfileComplete, // Only sending isProfileComplete status
+      token: token,
+      isProfileComplete: user.isProfileComplete,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        isVerified: user.isVerified
+      }
     });
   } catch (error) {
     console.error("OTP Verification Error:", error);
@@ -617,9 +654,51 @@ exports.getProfile = async (req, res, next) => {
 // Update profile
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, email } = req.body;
+    const { name, email, userType, companyDetails } = req.body;
     const updates = { name, email };
-    console.log("Req BOdy", req.body);
+    
+    console.log("Req Body", req.body);
+    
+    // Handle user type update
+    if (userType && ['home', 'pg', 'company'].includes(userType)) {
+      updates.userType = userType;
+    }
+    
+    // Handle company details if user type is company
+    if (userType === 'company' && companyDetails) {
+      try {
+        // Parse companyDetails if it's a string (from FormData)
+        const parsedCompanyDetails = typeof companyDetails === 'string' 
+          ? JSON.parse(companyDetails) 
+          : companyDetails;
+        
+        updates.companyDetails = {
+          companyName: parsedCompanyDetails.companyName || '',
+          companySize: parsedCompanyDetails.companySize || '',
+          industry: parsedCompanyDetails.industry || '',
+          gstNumber: parsedCompanyDetails.gstNumber || '',
+          contactPerson: parsedCompanyDetails.contactPerson || '',
+          designation: parsedCompanyDetails.designation || ''
+        };
+      } catch (parseError) {
+        console.error('Error parsing company details:', parseError);
+        return res.status(400).json({
+          success: false,
+          message: "Invalid company details format"
+        });
+      }
+    } else if (userType !== 'company') {
+      // Clear company details if user type is not company
+      updates.companyDetails = {
+        companyName: '',
+        companySize: '',
+        industry: '',
+        gstNumber: '',
+        contactPerson: '',
+        designation: ''
+      };
+    }
+    
     // Handle profile picture if uploaded
     if (req.file) {
       updates.profilePicture = await uploadFile2(req.file, "profile");
@@ -631,15 +710,83 @@ exports.updateProfile = async (req, res) => {
       { new: true }
     ).select("-password -tempOTP -otpExpiry");
 
+    console.log("Updated user:", user);
+
     res.json({
       success: true,
       user,
+      message: "Profile updated successfully"
     });
   } catch (error) {
     console.error("Update Profile Error:", error);
     res.status(500).json({
       success: false,
       message: "Error updating profile",
+      error: error.message
+    });
+  }
+};
+
+// Change password
+exports.changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Current password and new password are required",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters long",
+      });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Check if user has a password set
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        message: "No password set. Please use OTP login or set a password first.",
+      });
+    }
+
+    // Verify current password
+    const bcrypt = require("bcryptjs");
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Current password is incorrect",
+      });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: "Password changed successfully",
+    });
+  } catch (error) {
+    console.error("Change Password Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error changing password",
     });
   }
 };
@@ -691,9 +838,36 @@ exports.updateProfile = async (req, res) => {
 // };
 
 // Add address
+// Get all addresses for authenticated user
+exports.getAddresses = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: user.addresses || []
+    });
+  } catch (error) {
+    console.error("Get addresses error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch addresses",
+      error: error.message
+    });
+  }
+};
+
 exports.addAddress = async (req, res) => {
   try {
-    const { address, landmark, addressType, lat, lng } = req.body;
+    const { address, landmark, addressType, lat, lng, pincode } = req.body;
 
     if (!address) {
       return res.status(400).json({
@@ -711,22 +885,24 @@ exports.addAddress = async (req, res) => {
     }
 
     // Check if the address type already exists for the user
-    const existingAddressIndex = user.addresses.findIndex(addr => addr.addressType === addressType);
+    const existingAddressIndex = addressType ? user.addresses.findIndex(addr => addr.addressType === addressType) : -1;
 
     if (existingAddressIndex !== -1) {
       // Update the existing address
       user.addresses[existingAddressIndex].address = address;
       user.addresses[existingAddressIndex].landmark = landmark || "";
-      user.addresses[existingAddressIndex].lat = lat;
-      user.addresses[existingAddressIndex].lng = lng;
+      user.addresses[existingAddressIndex].lat = lat || "";
+      user.addresses[existingAddressIndex].lng = lng || "";
+      user.addresses[existingAddressIndex].pincode = pincode || "";
     } else {
       // Add new address to the addresses array
       user.addresses.push({
         address,
         landmark: landmark || "",
-        addressType: addressType || "home",
-        lat,
-        lng
+        addressType: addressType || "Other",
+        lat: lat || "",
+        lng: lng || "",
+        pincode: pincode || ""
       });
     }
 
@@ -919,3 +1095,209 @@ exports.addliveselectedAdd = async (req, res) => {
     });
   }
 }
+
+// Get user's AMC subscriptions
+exports.getAMCSubscriptions = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    const user = await User.findById(userId)
+      .select('amcSubscriptions amcSubscription name email phone')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Combine both amcSubscription (single) and amcSubscriptions (array)
+    const subscriptions = [];
+    
+    // Add single AMC subscription if exists
+    if (user.amcSubscription && user.amcSubscription.planId) {
+      subscriptions.push({
+        _id: user.amcSubscription.planId,
+        planName: user.amcSubscription.planName,
+        planPrice: user.amcSubscription.planPrice || 0,
+        startDate: user.amcSubscription.startDate,
+        endDate: user.amcSubscription.endDate,
+        status: user.amcSubscription.isActive ? 'active' : 'expired',
+        subscribedAt: user.amcSubscription.startDate,
+        features: user.amcSubscription.features || [],
+        serviceAddress: user.amcSubscription.serviceAddress || {},
+        type: 'single'
+      });
+    }
+    
+    // Add multiple AMC subscriptions if exist
+    if (user.amcSubscriptions && Array.isArray(user.amcSubscriptions)) {
+      user.amcSubscriptions.forEach(subscription => {
+        subscriptions.push({
+          _id: subscription._id,
+          planName: subscription.planName,
+          planPrice: subscription.amount,
+          startDate: subscription.subscribedAt,
+          endDate: subscription.endDate || new Date(new Date(subscription.subscribedAt).getTime() + 365 * 24 * 60 * 60 * 1000), // Default 1 year
+          status: subscription.status || 'active',
+          subscribedAt: subscription.subscribedAt,
+          txnid: subscription.txnid,
+          mihpayid: subscription.mihpayid,
+          features: subscription.features || [],
+          serviceAddress: subscription.serviceAddress || {},
+          type: 'multiple'
+        });
+      });
+    }
+
+    // Sort by subscription date (newest first)
+    subscriptions.sort((a, b) => new Date(b.subscribedAt) - new Date(a.subscribedAt));
+
+    return res.status(200).json({
+      success: true,
+      message: "AMC subscriptions fetched successfully",
+      data: {
+        subscriptions: subscriptions,
+        activeSubscription: subscriptions.find(sub => sub.status === 'active') || null,
+        totalSubscriptions: subscriptions.length
+      }
+    });
+
+  } catch (error) {
+    console.error("Get AMC Subscriptions Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch AMC subscriptions",
+      error: error.message
+    });
+  }
+};
+
+// Get active AMC subscription
+exports.getActiveAMCSubscription = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    const user = await User.findById(userId)
+      .select('amcSubscriptions amcSubscription')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    let activeSubscription = null;
+
+    // Check single AMC subscription
+    if (user.amcSubscription && user.amcSubscription.isActive) {
+      activeSubscription = {
+        _id: user.amcSubscription.planId,
+        planName: user.amcSubscription.planName,
+        planPrice: user.amcSubscription.planPrice || 0,
+        startDate: user.amcSubscription.startDate,
+        endDate: user.amcSubscription.endDate,
+        status: 'active',
+        features: user.amcSubscription.features || [],
+        serviceAddress: user.amcSubscription.serviceAddress || {},
+        type: 'single'
+      };
+    }
+
+    // Check multiple AMC subscriptions for active ones
+    if (!activeSubscription && user.amcSubscriptions && Array.isArray(user.amcSubscriptions)) {
+      const activeAMC = user.amcSubscriptions.find(sub => sub.status === 'active');
+      if (activeAMC) {
+        activeSubscription = {
+          _id: activeAMC._id,
+          planName: activeAMC.planName,
+          planPrice: activeAMC.amount,
+          startDate: activeAMC.subscribedAt,
+          endDate: activeAMC.endDate || new Date(new Date(activeAMC.subscribedAt).getTime() + 365 * 24 * 60 * 60 * 1000),
+          status: activeAMC.status,
+          features: activeAMC.features || [],
+          serviceAddress: activeAMC.serviceAddress || {},
+          type: 'multiple'
+        };
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: activeSubscription ? "Active AMC subscription found" : "No active AMC subscription",
+      data: activeSubscription
+    });
+
+  } catch (error) {
+    console.error("Get Active AMC Subscription Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch active AMC subscription",
+      error: error.message
+    });
+  }
+};
+
+// Cancel AMC subscription
+exports.cancelAMCSubscription = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { subscriptionId } = req.params;
+    const { reason } = req.body;
+    
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    let subscriptionFound = false;
+
+    // Check if it's a single AMC subscription
+    if (user.amcSubscription && user.amcSubscription.planId && user.amcSubscription.planId.toString() === subscriptionId) {
+      user.amcSubscription.isActive = false;
+      user.amcSubscription.cancelledAt = new Date();
+      user.amcSubscription.cancellationReason = reason || 'User requested cancellation';
+      subscriptionFound = true;
+    }
+
+    // Check multiple AMC subscriptions
+    if (!subscriptionFound && user.amcSubscriptions && Array.isArray(user.amcSubscriptions)) {
+      const subscriptionIndex = user.amcSubscriptions.findIndex(sub => sub._id.toString() === subscriptionId);
+      if (subscriptionIndex !== -1) {
+        user.amcSubscriptions[subscriptionIndex].status = 'cancelled';
+        user.amcSubscriptions[subscriptionIndex].cancelledAt = new Date();
+        user.amcSubscriptions[subscriptionIndex].cancellationReason = reason || 'User requested cancellation';
+        subscriptionFound = true;
+      }
+    }
+
+    if (!subscriptionFound) {
+      return res.status(404).json({
+        success: false,
+        message: "AMC subscription not found"
+      });
+    }
+
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "AMC subscription cancelled successfully"
+    });
+
+  } catch (error) {
+    console.error("Cancel AMC Subscription Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to cancel AMC subscription",
+      error: error.message
+    });
+  }
+};

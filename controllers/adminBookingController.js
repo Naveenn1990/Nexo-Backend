@@ -12,6 +12,7 @@ exports.getAllBookings = async (req, res) => {
             status,
             fromDate,
             toDate,
+            search,
             sortBy = 'createdAt',
             sortOrder = 'desc'
         } = req.query;
@@ -38,6 +39,26 @@ exports.getAllBookings = async (req, res) => {
             if (toDate) {
                 query.createdAt.$lte = new Date(toDate);
             }
+        }
+
+        // Add search filter - we'll use aggregation for complex search
+        let searchStage = null;
+        if (search && search.trim()) {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            searchStage = {
+                $match: {
+                    $or: [
+                        { 'user.name': searchRegex },
+                        { 'user.phone': searchRegex },
+                        { 'user.email': searchRegex },
+                        { 'partner.profile.name': searchRegex },
+                        { 'partner.profile.phone': searchRegex },
+                        { 'subService.service.name': searchRegex },
+                        { 'location.address': searchRegex },
+                        { 'location.pincode': searchRegex }
+                    ]
+                }
+            };
         }
 
         // Build sort object
@@ -72,47 +93,134 @@ exports.getAllBookings = async (req, res) => {
         });
 
         // Step 4: Fetch bookings with pagination
-        const bookings = await Booking.find(query)
-            .populate({
-                path: "user", // Populate user details
-                select: 'name email phone profilePicture addresses'
-            })
-            .populate({
-                path: "subService",
-                populate: {
-                    path: "service", // SubService -> Service
+        let bookings;
+        let searchTotal = total; // For search, we need to recalculate total
+
+        if (searchStage) {
+            // Use aggregation for search functionality
+            const aggregationPipeline = [
+                { $match: query }, // Apply basic filters first
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'user',
+                        foreignField: '_id',
+                        as: 'user'
+                    }
+                },
+                { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+                {
+                    $lookup: {
+                        from: 'partners',
+                        localField: 'partner',
+                        foreignField: '_id',
+                        as: 'partner'
+                    }
+                },
+                { $unwind: { path: '$partner', preserveNullAndEmptyArrays: true } },
+                {
+                    $lookup: {
+                        from: 'subservices',
+                        localField: 'subService',
+                        foreignField: '_id',
+                        as: 'subService'
+                    }
+                },
+                { $unwind: { path: '$subService', preserveNullAndEmptyArrays: true } },
+                {
+                    $lookup: {
+                        from: 'services',
+                        localField: 'subService.service',
+                        foreignField: '_id',
+                        as: 'subService.service'
+                    }
+                },
+                { $unwind: { path: '$subService.service', preserveNullAndEmptyArrays: true } },
+                searchStage, // Apply search filter after populating
+                { $sort: sort },
+                {
+                    $facet: {
+                        data: [
+                            { $skip: skip },
+                            { $limit: limitNum }
+                        ],
+                        totalCount: [
+                            { $count: "count" }
+                        ]
+                    }
+                }
+            ];
+
+            const result = await Booking.aggregate(aggregationPipeline);
+            bookings = result[0].data || [];
+            searchTotal = result[0].totalCount[0]?.count || 0;
+
+            // Manually populate remaining fields for aggregated results
+            await Booking.populate(bookings, [
+                {
+                    path: "partner",
+                    select: 'profile.name profile.email profile.phone profilePicture phone'
+                },
+                {
+                    path: "teamMember",
+                    select: 'name phone role partner',
                     populate: {
-                        path: "subCategory", // Service -> SubCategory
+                        path: "partner",
+                        select: 'profile.name profile.email profile.phone'
+                    }
+                },
+                // {
+                //     path: "cart.product"
+                // },
+                {
+                    path: "cart.addedByPartner",
+                    select: "profile.name profile.email"
+                }
+            ]);
+        } else {
+            // Use regular find for non-search queries
+            bookings = await Booking.find(query)
+                .populate({
+                    path: "user",
+                    select: 'name email phone profilePicture addresses'
+                })
+                .populate({
+                    path: "subService",
+                    populate: {
+                        path: "service",
                         populate: {
-                            path: "category", // SubCategory -> ServiceCategory
-                            select: "name",
+                            path: "subCategory",
+                            populate: {
+                                path: "category",
+                                select: "name",
+                            },
                         },
                     },
-                },
-            })
-            .populate({
-                path: "partner", // Populate partner details
-                select: 'profile.name profile.email profile.phone profilePicture'
-            })
-            .populate({
-                path: "teamMember", // Populate team member details
-                select: 'name phone role partner',
-                populate: {
+                })
+                .populate({
                     path: "partner",
-                    select: 'profile.name profile.email profile.phone'
-                }
-            })
-            .populate({
-                path: "cart.product", // Populate product details inside cart
-            })
-            .populate({
-                path: "cart.addedByPartner", // Populate partner who added the product
-                select: "profile.name profile.email", // Select specific fields
-            })
-            .sort(sort)
-            .skip(skip)
-            .limit(limitNum)
-            .lean(); // Convert to plain JS objects for better performance
+                    select: 'profile.name profile.email profile.phone profilePicture phone'
+                })
+                .populate({
+                    path: "teamMember",
+                    select: 'name phone role partner',
+                    populate: {
+                        path: "partner",
+                        select: 'profile.name profile.email profile.phone'
+                    }
+                })
+                // .populate({
+                //     path: "cart.product"
+                // })
+                .populate({
+                    path: "cart.addedByPartner",
+                    select: "profile.name profile.email"
+                })
+                .sort(sort)
+                .skip(skip)
+                .limit(limitNum)
+                .lean();
+        }
 
         // Step 4.5: Fetch quotations for each booking
         const bookingIds = bookings.map(b => b._id);
@@ -133,44 +241,104 @@ exports.getAllBookings = async (req, res) => {
         });
 
         // Step 5: Format the bookings
-        const formattedBookings = bookings.map(booking => ({
-            _id: booking._id,
-            booking,
-            customerName: booking.user?.name || 'N/A',
-            customerEmail: booking.user?.email || 'N/A',
-            customerPhone: booking.user?.phone || 'N/A',
-            serviceName: booking.subService?.service?.name || 'N/A',
-            categoryName: booking.subService?.service?.subCategory?.category?.name || 'N/A',
-            partner: booking.partner,
-            partnerId: booking.partner?._id || 'N/A',
-            partnerName: booking.partner?.profile?.name || 'Still not assigned',
-            partnerEmail: booking.partner?.profile?.email || 'N/A',
-            partnerPhone: booking.partner?.profile?.phone || 'N/A',
-            partnerAddress: booking.partner?.profile?.address || 'N/A',
-            partnerProfilePicture: booking.partner?.profilePicture || 'N/A',
-            amount: booking.amount || 0,
-            paymentMode: booking.paymentMode || 'N/A',
-            status: booking.status || 'N/A',
-            scheduledDate: booking.scheduledDate,
-            scheduledTime: booking.scheduledTime,
-            chat: booking.chat,
-            quotations: quotationsByBooking[booking._id.toString()] || [], // Add quotations
-            remark: booking.remark || null, // Add partner remark
-            pauseDetails: booking.pauseDetails || null, // Add pause details
-            photos: booking.photos || [], // Add photos
-            videos: booking.videos || [], // Add videos
-            completedAt: booking.completedAt || null, // Add completion date
-            booking,
-            location: {
-                address: booking.location?.address || 'N/A',
-                landmark: booking.location?.landmark || 'N/A',
-                pincode: booking.location?.pincode || 'N/A'
-            },
-            createdAt: booking.createdAt
-        }));
+        const formattedBookings = bookings.map(booking => {
+            // Partner name handling - preserve original names, only clean if corrupted
+            let partnerName = 'Still not assigned';
+            let partnerPhone = 'N/A';
+            
+            if (booking.partner) {
+                // Get the partner name and phone
+                const rawPartnerName = booking.partner.profile?.name || '';
+                const rawPartnerPhone = booking.partner.profile?.phone || booking.partner.phone || '';
+                
+                partnerPhone = rawPartnerPhone || 'N/A';
+                
+                if (rawPartnerName) {
+                    // Only clean if the name actually contains phone numbers or is corrupted
+                    let cleanName = rawPartnerName.trim();
+                    let needsCleaning = false;
+                    
+                    // Check if name contains phone number (only clean if it does)
+                    if (rawPartnerPhone && cleanName.includes(rawPartnerPhone)) {
+                        needsCleaning = true;
+                        cleanName = cleanName.replace(new RegExp(rawPartnerPhone, 'g'), '').trim();
+                    }
+                    
+                    // Check if name contains other phone-like patterns
+                    if (/\b\d{10}\b/.test(cleanName) || /\+91\s*\d{10}/.test(cleanName)) {
+                        needsCleaning = true;
+                        cleanName = cleanName.replace(/\b\d{10}\b/g, '').trim();
+                        cleanName = cleanName.replace(/\+91\s*\d{10}/g, '').trim();
+                    }
+                    
+                    // Only apply aggressive cleaning if we detected corruption
+                    if (needsCleaning) {
+                        cleanName = cleanName.replace(/\b\d{7,}\b/g, '').trim();
+                        cleanName = cleanName.replace(/\s+/g, ' ').trim();
+                        cleanName = cleanName.replace(/^[-\s]+|[-\s]+$/g, '').trim();
+                    }
+                    
+                    // Use cleaned name if valid, otherwise use original
+                    if (cleanName && cleanName.length >= 2 && !cleanName.match(/^\d+$/) && !cleanName.match(/^[^a-zA-Z]*$/)) {
+                        partnerName = cleanName;
+                    } else if (!needsCleaning && rawPartnerName.length >= 2) {
+                        // If no cleaning was needed and original name is reasonable, use it
+                        partnerName = rawPartnerName;
+                    } else if (rawPartnerPhone) {
+                        // Only use generic name if original was corrupted
+                        partnerName = `Service Partner (${rawPartnerPhone.slice(-4)})`;
+                    } else {
+                        partnerName = 'Service Partner';
+                    }
+                } else if (rawPartnerPhone) {
+                    // If no name but has phone, create a meaningful name
+                    partnerName = `Service Partner (${rawPartnerPhone.slice(-4)})`;
+                }
+            }
+            
+            return {
+                _id: booking._id,
+                booking,
+                customerName: booking.user?.name || 'N/A',
+                customerEmail: booking.user?.email || 'N/A',
+                customerPhone: booking.user?.phone || 'N/A',
+                serviceName: booking.subService?.service?.name || 'N/A',
+                categoryName: booking.subService?.service?.subCategory?.category?.name || 'N/A',
+                partner: booking.partner,
+                partnerId: booking.partner?._id || 'N/A',
+                partnerName: partnerName,
+                partnerEmail: (booking.partner?.profile?.email && typeof booking.partner.profile.email === 'string') 
+                    ? booking.partner.profile.email.trim() 
+                    : 'N/A',
+                partnerPhone: partnerPhone,
+                partnerAddress: (booking.partner?.profile?.address && typeof booking.partner.profile.address === 'string') 
+                    ? booking.partner.profile.address.trim() 
+                    : 'N/A',
+                partnerProfilePicture: booking.partner?.profilePicture || 'N/A',
+                amount: booking.amount || 0,
+                paymentMode: booking.paymentMode || 'N/A',
+                status: booking.status || 'N/A',
+                scheduledDate: booking.scheduledDate,
+                scheduledTime: booking.scheduledTime,
+                chat: booking.chat,
+                quotations: quotationsByBooking[booking._id.toString()] || [], // Add quotations
+                remark: booking.remark || null, // Add partner remark
+                pauseDetails: booking.pauseDetails || null, // Add pause details
+                photos: booking.photos || [], // Add photos
+                videos: booking.videos || [], // Add videos
+                completedAt: booking.completedAt || null, // Add completion date
+                location: {
+                    address: booking.location?.address || 'N/A',
+                    landmark: booking.location?.landmark || 'N/A',
+                    pincode: booking.location?.pincode || 'N/A'
+                },
+                createdAt: booking.createdAt
+            };
+        });
 
-        // Calculate pagination info
-        const totalPages = Math.ceil(total / limitNum);
+        // Calculate pagination info using search total if applicable
+        const actualTotal = searchStage ? searchTotal : total;
+        const totalPages = Math.ceil(actualTotal / limitNum);
         const hasNextPage = pageNum < totalPages;
         const hasPrevPage = pageNum > 1;
 
@@ -184,12 +352,12 @@ exports.getAllBookings = async (req, res) => {
             pagination: {
                 currentPage: pageNum,
                 totalPages,
-                totalItems: total,
+                totalItems: actualTotal,
                 itemsPerPage: limitNum,
                 hasNextPage,
                 hasPrevPage,
                 startIndex: skip + 1,
-                endIndex: Math.min(skip + limitNum, total)
+                endIndex: Math.min(skip + limitNum, actualTotal)
             }
         });
 

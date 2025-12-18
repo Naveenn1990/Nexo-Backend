@@ -65,3 +65,6 @@ exports.isAuthenticatedUser = async (req, res, next) => {
         });
     }
 };
+
+// Alias for user authentication
+exports.authenticateUser = exports.isAuthenticatedUser;

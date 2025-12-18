@@ -40,6 +40,7 @@ router.get("/dashboard/counts", adminAuth, adminController.getDashboardCounts);
 
 // User Management
 router.get("/users", adminAuth, adminController.getAllUsers);
+router.get("/customers", adminAuth, adminController.getAllCustomers);
 
 // Partner management
 router.get("/partners", adminAuth, adminController.getAllPartners);
@@ -464,6 +465,25 @@ router.get('/amc-plans/:planId', adminAuth, amcPlanController.getPlanById);
 router.post('/amc-plans', adminAuth, amcPlanController.createPlan);
 router.put('/amc-plans/:planId', adminAuth, amcPlanController.updatePlan);
 router.delete('/amc-plans/:planId', adminAuth, amcPlanController.deletePlan);
+router.post('/amc-plans/generate-from-services', adminAuth, amcPlanController.generatePlansFromServices);
+router.post('/amc-plans/create-samples', adminAuth, amcPlanController.createSamplePlans);
+router.get('/amc-subscribers', adminAuth, amcPlanController.getAMCSubscribers);
+router.post('/amc-subscribers/assign-partner', adminAuth, amcPlanController.assignAMCSubscriptionToPartner);
+
+// Fix user data issues
+router.post('/fix-user-data', adminAuth, async (req, res) => {
+  try {
+    const { runAllFixes } = require('../utils/fixUserCompanyDetails');
+    const result = await runAllFixes();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error running user data fixes',
+      error: error.message
+    });
+  }
+});
 
 // Featured Reviews Management (Admin)
 router.get('/featured-reviews', adminAuth, featuredReviewController.getAllReviewsAdmin);
@@ -510,5 +530,10 @@ router.get("/quotations", adminAuth, quotationController.getAllQuotations);
 router.get("/quotations/:quotationId", adminAuth, quotationController.getQuotationById);
 router.put("/quotations/:quotationId/approve", adminAuth, quotationController.adminAcceptQuotation);
 router.put("/quotations/:quotationId/reject", adminAuth, quotationController.adminRejectQuotation);
+
+// User Subscription Management (Admin)
+const userSubscriptionController = require("../controllers/userSubscriptionController");
+router.get("/user-subscriptions", adminAuth, userSubscriptionController.getAllSubscriptions);
+router.get("/user-subscriptions/stats", adminAuth, userSubscriptionController.getSubscriptionStats);
 
 module.exports = router;

@@ -10,6 +10,7 @@ const {
   verifyLoginOTP,
   getProfile,
   updateProfile,
+  changePassword,
   addAddress,
   updateAddress,
   deleteAddress,
@@ -23,6 +24,7 @@ const userServiceController = require("../controllers/userServiceController");
 const bannerController = require("../controllers/bannerController");
 const userController = require("../controllers/userController");
 const bookingController = require("../controllers/bookingController");
+const dashboardController = require("../controllers/userDashboardController");
 
 /**
  * @swagger
@@ -441,12 +443,18 @@ router.get("/profile", auth, getProfile);
  */
 router.put("/profile", auth, upload.single("profilePicture"), updateProfile);
 
+// Change password route (protected)
+router.put("/change-password", auth, changePassword);
+
 // Get user details route
 router.get("/details/:userId", auth, getUserDetails);
 
 router.put("/addliveselectedAdd",auth,addliveselectedAdd);
 
 // Address routes (protected)
+// Get all addresses for the authenticated user
+router.get("/addresses", auth, userController.getAddresses);
+
 /**
  * @swagger
  * /api/user/address:
@@ -489,7 +497,7 @@ router.put("/addliveselectedAdd",auth,addliveselectedAdd);
  *       500:
  *         description: Server error
  */
-router.post("/address", auth, addAddress);
+router.post("/addresses", auth, addAddress);
 
 /**
  * @swagger
@@ -800,5 +808,94 @@ router.get("/bookings/:bookingId/quotations", auth, quotationController.getQuota
 router.get("/quotations/:quotationId", auth, quotationController.getQuotationById);
 router.post("/quotations/:quotationId/accept", auth, quotationController.customerAcceptQuotation);
 router.post("/quotations/:quotationId/reject", auth, quotationController.customerRejectQuotation);
+
+// Dashboard Routes - Enhanced with time-based insights
+router.get("/dashboard", auth, dashboardController.getEnhancedDashboard);
+router.get("/dashboard/quick-stats", auth, dashboardController.getQuickStats);
+router.get("/dashboard/alerts", auth, dashboardController.getSmartAlerts);
+router.get("/dashboard/streak", auth, dashboardController.getActivityStreak);
+router.get("/dashboard/suggestions", auth, dashboardController.getSuggestions);
+router.get("/dashboard/activity", auth, dashboardController.getRecentActivity);
+router.get("/dashboard/booking-stats", auth, dashboardController.getBookingStats);
+router.get("/dashboard/wallet-summary", auth, dashboardController.getWalletSummary);
+router.get("/dashboard/insights", auth, dashboardController.getInsights);
+router.get("/dashboard/recommendations", auth, dashboardController.getRecommendations);
+router.get("/dashboard/greeting", auth, dashboardController.getGreeting);
+
+// AMC Subscription Routes
+const { getAMCSubscriptions, getActiveAMCSubscription, cancelAMCSubscription } = require("../controllers/userController");
+
+/**
+ * @swagger
+ * /api/user/amc-subscriptions:
+ *   get:
+ *     summary: Get user's AMC subscriptions
+ *     tags: [AMC Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: AMC subscriptions fetched successfully
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get("/amc-subscriptions", auth, getAMCSubscriptions);
+
+/**
+ * @swagger
+ * /api/user/amc-subscriptions/active:
+ *   get:
+ *     summary: Get user's active AMC subscription
+ *     tags: [AMC Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Active AMC subscription fetched successfully
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get("/amc-subscriptions/active", auth, getActiveAMCSubscription);
+
+/**
+ * @swagger
+ * /api/user/amc-subscriptions/{subscriptionId}/cancel:
+ *   put:
+ *     summary: Cancel AMC subscription
+ *     tags: [AMC Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: subscriptionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: AMC subscription ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason:
+ *                 type: string
+ *                 description: Reason for cancellation
+ *     responses:
+ *       200:
+ *         description: AMC subscription cancelled successfully
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Subscription not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/amc-subscriptions/:subscriptionId/cancel", auth, cancelAMCSubscription);
 
 module.exports = router;

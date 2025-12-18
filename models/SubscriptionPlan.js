@@ -15,6 +15,16 @@ const subscriptionPlanSchema = new mongoose.Schema({
     type: String,
     default: '' // e.g., "₹99" - for display purposes
   },
+  duration: {
+    type: Number,
+    default: 1, // Duration in months
+    min: 1
+  },
+  durationUnit: {
+    type: String,
+    enum: ['month', 'year'],
+    default: 'month'
+  },
   features: [{
     type: String,
     required: true

@@ -142,6 +142,10 @@ const popularServiceSchema = new mongoose.Schema({
       }
     }]
   }],
+  cities: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'City'
+  }],
   order: {
     type: Number,
     default: 0

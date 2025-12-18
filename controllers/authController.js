@@ -31,8 +31,8 @@ exports.sendOTP = async (req, res) => {
       { upsert: true, new: true }
     );
 
-    // Send OTP via SMS
-    await sendOTP(phone, otp);
+    // Skip SMS sending for testing
+    // await sendOTP(phone, otp);
 
     res.status(200).json({
       success: true,
@@ -226,16 +226,13 @@ exports.resendOTP = async (req, res) => {
     user.tempOTPExpiry = tempOTPExpiry;
     await user.save();
 
-    // Send OTP via SMS
-    await sendOTP(phone, otp);
+    // Skip SMS sending for testing
+    // await sendOTP(phone, otp);
 
     res.status(200).json({
       success: true,
-      otp,
-      message: "OTP resent successfully",
-
-      //Added For Resend otp view in Ui
-      otp: otp.toString()
+      otp: otp.toString(),
+      message: "OTP resent successfully"
     });
   } catch (error) {
     console.error("Error in resendOTP:", error);
@@ -278,11 +275,12 @@ exports.requestPasswordResetOTP = async (req, res) => {
     user.tempOTPExpiry = tempOTPExpiry;
     await user.save();
 
-    // Send OTP via SMS
-    await sendOTP(phone, otp);
+    // Skip SMS sending for testing
+    // await sendOTP(phone, otp);
 
     res.status(200).json({
       success: true,
+      otp: otp,
       message: "OTP sent successfully",
     });
   } catch (error) {

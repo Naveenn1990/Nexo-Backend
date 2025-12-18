@@ -4,6 +4,7 @@ const PopularService = require('../models/PopularService');
 exports.getAllPopularServices = async (req, res) => {
   try {
     const services = await PopularService.find()
+      .populate('cities', 'name icon isEnabled')
       .sort({ order: 1, createdAt: -1 })
       .lean();
 
@@ -51,7 +52,8 @@ exports.getAllPopularServices = async (req, res) => {
 exports.getPopularService = async (req, res) => {
   try {
     const { id } = req.params;
-    const service = await PopularService.findById(id);
+    const service = await PopularService.findById(id)
+      .populate('cities', 'name icon isEnabled');
 
     if (!service) {
       return res.status(404).json({
@@ -101,7 +103,7 @@ exports.getPopularService = async (req, res) => {
 // Create popular service
 exports.createPopularService = async (req, res) => {
   try {
-    const { name, slug, icon, order, isActive, description, price, basePrice, discount, discountType, cgst, sgst, serviceCharge, serviceChargeType, trusted, included, excluded, addOns } = req.body;
+    const { name, slug, icon, order, isActive, description, price, basePrice, discount, discountType, cgst, sgst, serviceCharge, serviceChargeType, trusted, included, excluded, addOns, cities } = req.body;
 
     // Validate required fields
     if (!name || !slug || !icon) {
@@ -137,6 +139,7 @@ exports.createPopularService = async (req, res) => {
       included: included || [],
       excluded: excluded || [],
       addOns: addOns || [],
+      cities: cities || [],
       order: order || 0,
       isActive: isActive !== undefined ? isActive : true
     });
@@ -162,7 +165,7 @@ exports.createPopularService = async (req, res) => {
 exports.updatePopularService = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, slug, icon, order, isActive, description, price, basePrice, discount, discountType, cgst, sgst, serviceCharge, serviceChargeType, trusted, included, excluded, addOns } = req.body;
+    const { name, slug, icon, order, isActive, description, price, basePrice, discount, discountType, cgst, sgst, serviceCharge, serviceChargeType, trusted, included, excluded, addOns, cities } = req.body;
 
     const service = await PopularService.findById(id);
     if (!service) {
@@ -200,6 +203,7 @@ exports.updatePopularService = async (req, res) => {
     if (included !== undefined) service.included = included;
     if (excluded !== undefined) service.excluded = excluded;
     if (addOns !== undefined) service.addOns = addOns;
+    if (cities !== undefined) service.cities = cities;
     if (order !== undefined) service.order = order;
     if (isActive !== undefined) service.isActive = isActive;
 

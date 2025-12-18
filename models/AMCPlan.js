@@ -43,6 +43,33 @@ const amcPlanSchema = new mongoose.Schema({
     type: String,
     default: '' // Optional WhatsApp number for this plan
   },
+  planType: {
+    type: String,
+    enum: ['individual', 'business', 'corporate'],
+    default: 'business',
+    required: true
+  },
+  targetCustomer: {
+    type: String,
+    default: '' // Description of target customer (e.g., "Small businesses", "Homeowners")
+  },
+  duration: {
+    type: Number,
+    default: 12 // Plan duration (e.g., 12 months, 1 year)
+  },
+  durationUnit: {
+    type: String,
+    enum: ['months', 'years'],
+    default: 'months'
+  },
+  includedServices: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PopularService' // References to popular services
+  }],
+  serviceFrequency: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {} // Object mapping service IDs to frequency (e.g., { "serviceId": "4" } for quarterly)
+  },
   metadata: {
     type: mongoose.Schema.Types.Mixed,
     default: {}

@@ -120,8 +120,16 @@ const uploadFile2 = (file, bucketname) => {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
 
-    // Create bucket subdirectory if it doesn't exist
-    const bucketDir = path.join(uploadsDir, bucketname);
+    // Map bucket names to correct subdirectories
+    let subdir = bucketname;
+    if (bucketname === 'partnerdoc' || bucketname === 'kyc') {
+      subdir = 'kyc';
+    } else if (bucketname === 'partner' || bucketname === 'team-member') {
+      subdir = 'profiles';
+    }
+
+    // Create subdirectory if it doesn't exist
+    const bucketDir = path.join(uploadsDir, subdir);
     if (!fs.existsSync(bucketDir)) {
       fs.mkdirSync(bucketDir, { recursive: true });
     }
@@ -136,7 +144,7 @@ const uploadFile2 = (file, bucketname) => {
         reject("File not uploaded");
       } else {
         // Return proper URL for local file access
-        let location = `https://nexo.works/uploads/${bucketname}/${filename}`;
+        let location = `https://nexo.works/uploads/${subdir}/${filename}`;
         console.log(location);
         resolve(location);
       }
@@ -218,31 +226,17 @@ const handleFileUpload = async (file, bucketname) => {
   
   // Check if file has buffer (memoryStorage) or path (diskStorage)
   if (file.buffer) {
-    // Using memoryStorage - use uploadFile2
-    return await uploadFile2(file, bucketname);
+    // Using memoryStorage - use uploadFile2 but return only filename
+    const fullUrl = await uploadFile2(file, bucketname);
+    // Extract filename from the full URL
+    if (fullUrl && fullUrl.includes('/')) {
+      return fullUrl.split('/').pop(); // Return just the filename
+    }
+    return fullUrl;
   } else if (file.path || file.filename) {
-    // Using diskStorage - file is already saved, just construct the URL
+    // Using diskStorage - file is already saved, return just the filename
     const filename = file.filename || path.basename(file.path);
-    // Determine subdirectory based on bucket name or file location
-    let subdir = bucketname;
-    
-    // Check if file is already in a subdirectory
-    if (file.path && file.path.includes('/')) {
-      const pathParts = file.path.split('/');
-      if (pathParts.length > 1) {
-        // Extract the subdirectory from the actual file path
-        subdir = pathParts[pathParts.length - 2];
-      }
-    }
-    
-    // Map bucket names to subdirectories
-    if (bucketname === 'partnerdoc' || bucketname === 'kyc') {
-      subdir = 'kyc';
-    } else if (bucketname === 'partner' || bucketname === 'team-member') {
-      subdir = 'profiles';
-    }
-    
-    return `https://nexo.works/uploads/${subdir}/${filename}`;
+    return filename;
   }
   
   return null;
