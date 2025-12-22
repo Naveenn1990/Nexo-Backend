@@ -1358,22 +1358,157 @@ exports.deletePartner = async (req, res) => {
   try {
       const { partnerId } = req.params;
 
-      // Find and delete the partner
-      const deletedPartner = await Partner.findByIdAndDelete(partnerId);
-      if (!deletedPartner) {
+      // Validate partnerId
+      if (!mongoose.Types.ObjectId.isValid(partnerId)) {
+          return res.status(400).json({
+              success: false,
+              message: "Invalid partner ID format."
+          });
+      }
+
+      // Check if partner exists with timeout
+      const partner = await Partner.findById(partnerId).maxTimeMS(10000); // 10 second timeout
+      if (!partner) {
           return res.status(404).json({
               success: false,
               message: "Partner not found."
           });
       }
-      await PartnerWallet.deleteOne({ partner: partnerId });
-      res.status(200).json({
-          success: true,
-          message: "Partner deleted successfully."
-      });
+
+      console.log(`Starting deletion process for partner: ${partner.Profile?.name || partnerId}`);
+
+      // Start a transaction with timeout settings
+      const session = await mongoose.startSession();
+      
+      try {
+          await session.withTransaction(async () => {
+              // Import required models
+              const TeamMember = require('../models/TeamMember');
+              const PartnerService = require('../models/PartnerService');
+              const PartnerProfile = require('../models/PartnerProfile');
+              const PartnerProduct = require('../models/PartnerProductModel');
+              const PartnerLocation = require('../models/Partnerlocation');
+              const Review = require('../models/Review');
+              const Quotation = require('../models/Quotation');
+              const ServiceSchedule = require('../models/ServiceSchedule');
+              const Lead = require('../models/Lead');
+              const Hub = require('../models/Hub');
+              const User = require('../models/User');
+
+              console.log('Deleting related data in batches...');
+
+              // Delete in smaller batches to avoid timeouts
+              // Batch 1: Direct partner data
+              await Promise.all([
+                  PartnerWallet.deleteOne({ partner: partnerId }, { session }).maxTimeMS(5000),
+                  TeamMember.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000),
+                  PartnerService.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000)
+              ]);
+
+              // Batch 2: Profile and product data
+              await Promise.all([
+                  PartnerProfile.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000),
+                  PartnerProduct.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000),
+                  PartnerLocation.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000)
+              ]);
+
+              // Batch 3: Reviews and quotations
+              await Promise.all([
+                  Review.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000),
+                  Quotation.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000),
+                  ServiceSchedule.deleteMany({ partner: partnerId }, { session }).maxTimeMS(5000)
+              ]);
+
+              // Batch 4: Update references (smaller operations)
+              await Lead.updateMany(
+                  { assignedPartner: partnerId },
+                  { $unset: { assignedPartner: 1 } },
+                  { session }
+              ).maxTimeMS(5000);
+
+              await Lead.updateMany(
+                  { 'bids.partner': partnerId },
+                  { $pull: { bids: { partner: partnerId } } },
+                  { session }
+              ).maxTimeMS(5000);
+
+              // Batch 5: Hub and user updates
+              await Hub.updateMany(
+                  { assignedPartners: partnerId },
+                  { $pull: { assignedPartners: partnerId } },
+                  { session }
+              ).maxTimeMS(5000);
+
+              await User.updateMany(
+                  { 'subscriptions.assignedPartner': partnerId },
+                  { $unset: { 'subscriptions.$.assignedPartner': 1, 'subscriptions.$.assignedPartnerName': 1 } },
+                  { session }
+              ).maxTimeMS(5000);
+
+              await User.updateMany(
+                  { 'reviews.partner': partnerId },
+                  { $pull: { reviews: { partner: partnerId } } },
+                  { session }
+              ).maxTimeMS(5000);
+
+              // Batch 6: Booking updates
+              await Booking.updateMany(
+                  { partner: partnerId },
+                  { 
+                      $unset: { partner: 1 },
+                      $set: { 
+                          status: 'cancelled',
+                          cancelledBy: 'admin',
+                          cancelReason: 'Partner account deleted',
+                          cancelledAt: new Date()
+                      }
+                  },
+                  { session }
+              ).maxTimeMS(5000);
+
+              console.log('Deleting main partner record...');
+              // Finally delete the partner
+              await Partner.findByIdAndDelete(partnerId, { session }).maxTimeMS(5000);
+
+              console.log(`Partner ${partnerId} deleted successfully`);
+          }, {
+              readConcern: { level: 'majority' },
+              writeConcern: { w: 'majority' },
+              maxCommitTimeMS: 30000 // 30 second timeout for transaction
+          });
+
+          res.status(200).json({
+              success: true,
+              message: "Partner and all related data deleted successfully."
+          });
+
+      } catch (transactionError) {
+          console.error('Transaction error during partner deletion:', transactionError);
+          throw transactionError;
+      } finally {
+          await session.endSession();
+      }
 
   } catch (error) {
-      console.error(error);
+      console.error('Delete Partner Error:', error);
+      
+      // Handle specific MongoDB Atlas errors
+      if (error.code === 8000 || error.codeName === 'AtlasError') {
+          return res.status(503).json({
+              success: false,
+              message: "Database is temporarily unavailable. Please try again in a few minutes.",
+              error: "Atlas connection timeout"
+          });
+      }
+      
+      if (error.name === 'MongoTimeoutError' || error.message.includes('timeout')) {
+          return res.status(408).json({
+              success: false,
+              message: "Operation timed out. The partner may have been partially deleted. Please check and try again.",
+              error: "Database timeout"
+          });
+      }
+
       res.status(500).json({
           success: false,
           message: "Internal server error",

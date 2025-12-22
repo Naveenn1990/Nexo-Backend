@@ -185,9 +185,19 @@ exports.register = async (req, res) => {
     }
 
     if (user) {
+      console.log("=== UPDATING EXISTING USER ===");
+      console.log("Before update - user password:", user.password);
+      console.log("New password from request:", password);
+      
       user.name = name;
       user.email = email;
       user.userType = userType || 'home';
+      
+      // Update password if provided
+      if (password) {
+        user.password = password;
+        console.log("Password updated to:", password);
+      }
       
       // Update company details if user type is company
       if (userType === 'company' && companyDetails) {
@@ -211,12 +221,15 @@ exports.register = async (req, res) => {
         handleReferral(user, referalCode)
       }
 
+      console.log("Before save - user password:", user.password);
       await user.save();
+      console.log("After save - user password:", user.password);
     } else {
       const userData = {
         name,
         email,
         phone,
+        password,
         userType: userType || 'home',
         isVerified: true,
         isProfileComplete: true, // Set to true on successful profile completion
@@ -299,38 +312,71 @@ exports.deleteUser = async (req, res) => {
 // Login with password
 exports.loginWithPassword = async (req, res) => {
   try {
+    console.log("=== LOGIN DEBUG ===");
     console.log("Request Body:", req.body);
     const { email, password } = req.body;
 
     if (!email || !password) {
+      console.log("Missing email or password");
       return res.status(400).json({
         success: false,
         message: "Email and password are required",
       });
     }
 
+    console.log("Looking for user with email:", email);
     // Find user
-    const user = await User.findOne({ email }).select("+password"); // Ensure password is selected
+    const user = await User.findOne({ email }).select("+password");
     if (!user) {
+      console.log("User not found with email:", email);
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
     }
 
+    console.log("User found:", {
+      id: user._id,
+      email: user.email,
+      hasPassword: !!user.password,
+      passwordLength: user.password ? user.password.length : 0,
+      passwordValue: user.password
+    });
+
     // Verify password
     if (!user.password) {
+      console.log("User has no password set");
       return res
         .status(500)
         .json({ success: false, message: "User does not have a password set" });
     }
 
-    const isMatch = await user.comparePassword(password);
+    console.log("Comparing password...");
+    console.log("Input password:", password);
+    console.log("Stored password/hash:", user.password);
+    
+    // Check if password is already hashed
+    const isHashed = user.password.startsWith('$2');
+    console.log("Is password hashed?", isHashed);
+    
+    let isMatch;
+    if (isHashed) {
+      // Use bcrypt comparison for hashed password
+      isMatch = await user.comparePassword(password);
+      console.log("Bcrypt comparison result:", isMatch);
+    } else {
+      // Direct comparison for plain text (shouldn't happen but let's check)
+      isMatch = user.password === password;
+      console.log("Plain text comparison result:", isMatch);
+    }
+    
     if (!isMatch) {
+      console.log("Password comparison failed");
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
     }
 
+    console.log("Login successful!");
     // Update last login
     user.lastLogin = new Date();
     await user.save();

@@ -422,6 +422,16 @@ router.put('/mg-plans/:planId', adminAuth, mgPlanController.updatePlan);
 router.delete('/mg-plans/:planId', adminAuth, mgPlanController.deletePlan);
 router.post('/mg-plans/:planId/subscribe', adminAuth, mgPlanController.adminSubscribeToPlan);
 
+// MG Plan History Management (Admin)
+router.get('/partners/:partnerId/mg-plan/history', adminAuth, mgPlanController.getPartnerPlanHistory);
+router.delete('/partners/:partnerId/mg-plan/history/:historyIndex', adminAuth, mgPlanController.deletePlanHistoryEntry);
+
+// Remove MG Plan (Admin)
+router.post('/partners/:partnerId/remove-mg-plan', adminAuth, mgPlanController.removeMGPlan);
+
+// Ensure Free Plan exists (Admin utility)
+router.post('/mg-plans/ensure-free-plan', adminAuth, mgPlanController.ensureFreePlanExists);
+
 router.get(
   '/partners/:partnerId/service-hubs',
   adminAuth,

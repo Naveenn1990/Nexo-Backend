@@ -561,70 +561,45 @@ exports.getPartnerPlan = async (req, res) => {
       });
     }
     
-    // If no plan assigned, get default plan or create one
+    // Check if partner has an active plan
     let plan = partner.mgPlan;
+    let isFreePlan = false;
+    
+    // If no plan assigned or plan is null, partner is on free plan
     if (!plan) {
-      plan = await MGPlan.findOne({ isDefault: true, isActive: true });
-      
-      // If no default plan exists, create Silver as default
-      if (!plan) {
-        plan = await MGPlan.findOne({ name: 'Silver', isActive: true });
-        if (!plan) {
-          // Create default Silver plan if none exists
-          plan = new MGPlan({
-            name: 'Silver',
-            price: 1000,
-            leads: 20,
-            commission: 5,
-            leadFee: 50,
-            minWalletBalance: 20,
-            description: 'Basic plan with guaranteed leads',
-            isDefault: true,
-            isActive: true
-          });
-          await plan.save();
-        } else {
-          // Set Silver as default
-          await MGPlan.updateMany({}, { isDefault: false });
-          plan.isDefault = true;
-          await plan.save();
-        }
-      }
-      // Assign default plan to partner
-      if (plan) {
-        const subscribedAt = new Date();
-        const expiresAt = new Date(subscribedAt);
-        // Use plan's validityMonths, default to 1 month if not set
-        const validityMonths = plan.validityMonths || 1;
-        expiresAt.setMonth(expiresAt.getMonth() + validityMonths);
-
-        partner.mgPlan = plan._id;
-        partner.mgPlanLeadQuota = plan.leads;
-        partner.mgPlanLeadsUsed = 0;
-        partner.mgPlanSubscribedAt = subscribedAt;
-        partner.mgPlanExpiresAt = expiresAt;
-        partner.leadAcceptancePaused = false;
-
-        partner.mgPlanHistory = partner.mgPlanHistory || [];
-        partner.mgPlanHistory.push({
-          plan: plan._id,
-          planName: plan.name,
-          price: plan.price,
-          leadsGuaranteed: plan.leads,
-          commissionRate: plan.commission,
-          leadFee: plan.leadFee,
-          subscribedAt,
-          expiresAt,
-          leadsConsumed: 0,
-          refundStatus: 'pending',
-          refundNotes: plan.refundPolicy
-        });
-        await partner.save();
-      }
+      isFreePlan = true;
+      // Don't auto-assign a default plan, let them stay on free plan
+      // Free plan has no guaranteed leads, no commission benefits
     }
 
     const wallet = await PartnerWallet.findOne({ partner: partner._id });
     const walletBalance = wallet?.balance ?? 0;
+    
+    // Free plan settings
+    if (isFreePlan) {
+      return res.json({
+        success: true,
+        data: {
+          plan: null,
+          isFreePlan: true,
+          subscribedAt: null,
+          expiresAt: null,
+          isExpired: false,
+          leadsGuaranteed: 0,
+          leadsUsed: 0,
+          leadsRemaining: 0,
+          leadFee: 100, // Higher lead fee for free plan
+          minWalletBalance: 50, // Higher minimum wallet balance for free plan
+          walletBalance,
+          leadAcceptancePaused: partner.leadAcceptancePaused || false,
+          refundStatus: 'not_applicable',
+          history: partner.mgPlanHistory || [],
+          planStatus: 'Free Plan - No guaranteed leads'
+        }
+      });
+    }
+
+    // Paid plan logic
     const leadFee = plan?.leadFee ?? 50;
     const minWalletBalance = plan?.minWalletBalance ?? 20;
 
@@ -658,6 +633,7 @@ exports.getPartnerPlan = async (req, res) => {
       success: true,
       data: {
         plan: plan || null,
+        isFreePlan: false,
         subscribedAt: partner.mgPlanSubscribedAt,
         expiresAt: partner.mgPlanExpiresAt,
         isExpired,
@@ -669,7 +645,8 @@ exports.getPartnerPlan = async (req, res) => {
         walletBalance,
         leadAcceptancePaused: partner.leadAcceptancePaused,
         refundStatus,
-        history: partner.mgPlanHistory || []
+        history: partner.mgPlanHistory || [],
+        planStatus: isExpired ? 'Expired' : 'Active'
       }
     });
   } catch (error) {
@@ -939,6 +916,230 @@ exports.renewPlan = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error renewing plan',
+      error: error.message
+    });
+  }
+};
+
+// Admin: Get partner's MG plan history
+exports.getPartnerPlanHistory = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    
+    const partner = await Partner.findById(partnerId)
+      .populate({
+        path: 'mgPlanHistory.plan',
+        select: 'name price leads commission leadFee minWalletBalance'
+      });
+    
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        partnerId: partner._id,
+        partnerName: partner.profile?.name || partner.name || partner.phone,
+        history: partner.mgPlanHistory || []
+      }
+    });
+  } catch (error) {
+    console.error('Get Partner Plan History Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching partner plan history',
+      error: error.message
+    });
+  }
+};
+
+// Admin: Delete MG plan history entry
+exports.deletePlanHistoryEntry = async (req, res) => {
+  try {
+    const { partnerId, historyIndex } = req.params;
+    
+    const partner = await Partner.findById(partnerId);
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner not found'
+      });
+    }
+    
+    if (!Array.isArray(partner.mgPlanHistory)) {
+      return res.status(404).json({
+        success: false,
+        message: 'No plan history found'
+      });
+    }
+    
+    const index = parseInt(historyIndex);
+    if (isNaN(index) || index < 0 || index >= partner.mgPlanHistory.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid history index'
+      });
+    }
+    
+    // Remove the history entry at the specified index
+    const deletedEntry = partner.mgPlanHistory.splice(index, 1)[0];
+    partner.markModified('mgPlanHistory');
+    await partner.save();
+    
+    res.json({
+      success: true,
+      message: 'Plan history entry deleted successfully',
+      data: {
+        deletedEntry,
+        remainingHistory: partner.mgPlanHistory
+      }
+    });
+  } catch (error) {
+    console.error('Delete Plan History Entry Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting plan history entry',
+      error: error.message
+    });
+  }
+};
+
+// Admin: Remove MG Plan from partner (set to free plan)
+exports.removeMGPlan = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    
+    const partner = await Partner.findById(partnerId).populate('mgPlan');
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner not found'
+      });
+    }
+    
+    // Store current plan info for history
+    const currentPlan = partner.mgPlan;
+    const currentPlanName = currentPlan ? currentPlan.name : 'Unknown Plan';
+    
+    // Add removal entry to history if there was an active plan
+    if (currentPlan) {
+      const removalEntry = {
+        plan: null, // No plan reference for removal entry
+        planName: `Removed: ${currentPlanName}`,
+        price: 0,
+        leadsGuaranteed: 0,
+        commissionRate: 0,
+        leadFee: 0,
+        subscribedAt: new Date(),
+        expiresAt: null,
+        leadsConsumed: partner.mgPlanLeadsUsed || 0,
+        refundStatus: 'removed',
+        refundNotes: `Plan removed by admin. Previous plan: ${currentPlanName}`,
+        paymentMethod: 'admin_action',
+        transactionId: `REMOVE-${partnerId}-${Date.now()}`
+      };
+      
+      if (!Array.isArray(partner.mgPlanHistory)) {
+        partner.mgPlanHistory = [];
+      }
+      partner.mgPlanHistory.push(removalEntry);
+      
+      // Keep only last 24 entries
+      if (partner.mgPlanHistory.length > 24) {
+        partner.mgPlanHistory = partner.mgPlanHistory.slice(-24);
+      }
+      partner.markModified('mgPlanHistory');
+    }
+    
+    // Reset MG plan fields to free plan state
+    partner.mgPlan = null;
+    partner.mgPlanSubscribedAt = null;
+    partner.mgPlanExpiresAt = null;
+    partner.mgPlanLeadQuota = 0;
+    partner.mgPlanLeadsUsed = 0;
+    partner.leadAcceptancePaused = false;
+    
+    await partner.save();
+    
+    res.json({
+      success: true,
+      message: 'MG Plan removed successfully. Partner is now on free plan.',
+      data: {
+        partnerId: partner._id,
+        partnerName: partner.profile?.name || partner.name || partner.phone,
+        previousPlan: currentPlanName,
+        currentStatus: 'Free Plan',
+        mgPlan: null,
+        mgPlanSubscribedAt: null,
+        mgPlanExpiresAt: null,
+        mgPlanLeadQuota: 0,
+        mgPlanLeadsUsed: 0,
+        leadAcceptancePaused: false
+      }
+    });
+  } catch (error) {
+    console.error('Remove MG Plan Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error removing MG plan',
+      error: error.message
+    });
+  }
+};
+
+// Admin: Ensure Free Plan exists in database
+exports.ensureFreePlanExists = async (req, res) => {
+  try {
+    // Check if Free plan already exists
+    let freePlan = await MGPlan.findOne({ name: 'Free', price: 0 });
+    
+    if (!freePlan) {
+      // Create Free plan
+      freePlan = new MGPlan({
+        name: 'Free',
+        price: 0,
+        leads: 0,
+        commission: 0,
+        leadFee: 100, // Higher lead fee for free users
+        minWalletBalance: 50, // Higher minimum balance for free users
+        description: 'Free plan with no guaranteed leads. Pay per lead basis.',
+        refundPolicy: 'No refunds applicable for free plan.',
+        features: [
+          'No guaranteed leads',
+          'Pay per lead (₹100 per lead)',
+          'Higher minimum wallet balance required',
+          'Access to basic features'
+        ],
+        isActive: true,
+        isDefault: false, // Free plan should not be default
+        validityType: 'monthly',
+        validityMonths: 1,
+        partnerType: 'both'
+      });
+      
+      await freePlan.save();
+      
+      res.json({
+        success: true,
+        message: 'Free plan created successfully',
+        data: freePlan
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'Free plan already exists',
+        data: freePlan
+      });
+    }
+  } catch (error) {
+    console.error('Ensure Free Plan Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating/checking free plan',
       error: error.message
     });
   }
