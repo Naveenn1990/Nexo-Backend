@@ -8,6 +8,7 @@ const {
   getBookingDetails,
   updateBooking,
   cancelBooking,
+  simpleCancelBooking,
   addReview,
   getAllBookings,
   getAllReviews,
@@ -450,7 +451,40 @@ router.post("/bookings", auth, createBooking);
 router.get("/bookings", auth, getUserBookings);
 router.get("/bookings/:bookingId", auth, getBookingDetails);
 router.put("/bookings/:bookingId", auth, updateBooking);
-router.put("/bookings/:bookingId/cancel", cancelBooking);
+// Alternative cancel route using simple function
+router.put("/bookings/:bookingId/cancel-simple", auth, simpleCancelBooking);
+
+// Test cancel booking route
+router.put("/bookings/:bookingId/cancel-test", auth, async (req, res) => {
+  try {
+    console.log("🧪 TEST CANCEL ROUTE:");
+    console.log("   Booking ID:", req.params.bookingId);
+    console.log("   User ID:", req.user?._id);
+    console.log("   Body:", req.body);
+    
+    res.json({
+      success: true,
+      message: "Test route working",
+      bookingId: req.params.bookingId,
+      userId: req.user?._id,
+      body: req.body
+    });
+  } catch (error) {
+    console.error("Test route error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.put("/bookings/:bookingId/cancel", auth, (req, res, next) => {
+  console.log("🔍 CANCEL ROUTE HIT:");
+  console.log("   Params:", req.params);
+  console.log("   User:", req.user ? req.user._id : 'No user');
+  console.log("   Body:", req.body);
+  next();
+}, cancelBooking);
 router.post("/bookings/:bookingId/review", auth, addReview);
 
 router.get("/categories", userServiceController.getAllCategories);

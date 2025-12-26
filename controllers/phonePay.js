@@ -1,7 +1,7 @@
 const transactionModel = require("../models/phonePay")
 const MERCHANT_ID = "M22TSD1Q44NGY";
 const SECRET_KEY = "883088e0-5c29-40a0-8577-bda713f8da3f";
-const CALLBACK_URL = "https://nexo.works";
+const CALLBACK_URL = "http://localhost:9088";
 const axios = require("axios");
 const crypto = require('crypto');
 
@@ -40,9 +40,9 @@ class Transaction{
         merchantTransactionId: data._id,
         merchantUserId: userId,
         amount: amount*100,
-        redirectUrl:  `https://nexo.works/payment-success?transactionId=${data._id}&userID=${userId}`,
+        redirectUrl:  `http://localhost:9088/payment-success?transactionId=${data._id}&userID=${userId}`,
         redirectMode: "GET",
-        callbackUrl: "https://nexo.works/api/phonepay/payment-callback",
+        callbackUrl: "http://localhost:9088/api/phonepay/payment-callback",
         mobileNumber: Mobile,
         paymentInstrument: {
           type: "PAY_PAGE",

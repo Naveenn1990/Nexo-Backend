@@ -31,8 +31,24 @@ const inventoryItemSchema = new mongoose.Schema({
   },
   unit: {
     type: String,
-    default: 'units',
+    default: 'pieces',
+    enum: ['pieces', 'kg', 'grams', 'liters', 'ml', 'meters', 'cm', 'feet', 'inches', 'sqft', 'sqm', 'boxes', 'packets', 'rolls', 'sets', 'pairs', 'units'],
     trim: true
+  },
+  brand: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  specifications: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  minOrderQuantity: {
+    type: Number,
+    min: 1,
+    default: 1
   },
   status: {
     type: String,

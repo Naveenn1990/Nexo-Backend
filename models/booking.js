@@ -27,6 +27,7 @@ const bookingSchema = new mongoose.Schema(
     serviceName: { type: String },
     serviceData: { type: mongoose.Schema.Types.Mixed },
     cartItems: [{ type: mongoose.Schema.Types.Mixed }],
+    cartTotal: { type: Number }, // Original cart total before GST and discounts
     customerDetails: {
       name: String,
       email: String,
@@ -58,7 +59,7 @@ const bookingSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "confirmed", "in_progress", "completed", "cancelled", "accepted", "rejected", "paused"],
+      enum: ["pending", "confirmed", "in_progress", "completed", "cancelled", "accepted", "rejected", "paused", "temp"],
       default: "pending",
     },
     paymentStatus: {
@@ -157,6 +158,10 @@ const bookingSchema = new mongoose.Schema(
     lng: { type: String },
     rideStart: { type: Boolean, default: false },
     currentBooking: { type: Boolean, default: false },
+    
+    // Temporary booking fields for payment flow
+    isTemporary: { type: Boolean, default: false },
+    expiresAt: { type: Date },
   },
   {
     timestamps: true,
@@ -288,6 +293,8 @@ bookingSchema.index({ scheduledDate: 1 });
 bookingSchema.index({ status: 1 });
 bookingSchema.index({ partner: 1 }); // Index added to efficiently fetch partner's bookings
 bookingSchema.index({ otpActive: 1, status: 1 }); // Index for OTP operations
+bookingSchema.index({ isTemporary: 1, expiresAt: 1 }); // Index for temporary booking cleanup
+bookingSchema.index({ txnid: 1 }); // Index for transaction lookup
 
 // Check if model already exists before defining
 const Booking = mongoose.models.Booking || mongoose.model("Booking", bookingSchema);

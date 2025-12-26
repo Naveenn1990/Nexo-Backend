@@ -5,6 +5,8 @@ const {
   createServiceBooking,
   handlePaymentSuccess,
   handlePaymentFailure,
+  handlePaymentWebhook,
+  checkPaymentStatus,
   getBookingDetails,
   getUserServiceBookings
 } = require('../controllers/serviceBookingController');
@@ -31,11 +33,32 @@ router.post('/service-booking/create-wallet-payment', isAuthenticatedUser, requi
 router.post('/service-booking/payment/success', handlePaymentSuccess);
 
 /**
+ * @route   POST /api/user/service-booking/payment/test-success
+ * @desc    Test payment success callback (for debugging)
+ * @access  Public (testing)
+ */
+router.post('/service-booking/payment/test-success', require('../controllers/serviceBookingController').testPaymentSuccess);
+
+/**
  * @route   POST /api/user/service-booking/payment/failure
  * @desc    Handle PayU payment failure callback
  * @access  Public (PayU callback)
  */
 router.post('/service-booking/payment/failure', handlePaymentFailure);
+
+/**
+ * @route   POST /api/user/service-booking/payment/webhook
+ * @desc    Handle PayU webhook for server-to-server notifications
+ * @access  Public (PayU webhook)
+ */
+router.post('/service-booking/payment/webhook', handlePaymentWebhook);
+
+/**
+ * @route   GET /api/user/service-booking/payment-status/:txnid
+ * @desc    Check payment status for a transaction
+ * @access  Private (User)
+ */
+router.get('/service-booking/payment-status/:txnid', isAuthenticatedUser, checkPaymentStatus);
 
 /**
  * @route   GET /api/user/service-booking/:bookingId

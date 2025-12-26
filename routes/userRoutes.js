@@ -798,7 +798,100 @@ router.get(
  *       500:
  *         description: Server error
  */
+router.get("/bookings", auth, bookingController.getUserBookings);
+router.get("/bookings/:bookingId", auth, bookingController.getBookingDetails);
+router.put("/bookings/:bookingId/cancel", auth, bookingController.cancelBooking);
 router.get("/api/user/bookings", auth, bookingController.getAllUserBookings);
+
+// Review routes
+/**
+ * @swagger
+ * /api/user/bookings/{bookingId}/review:
+ *   post:
+ *     summary: Submit a review for a completed booking
+ *     tags: [Reviews]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - rating
+ *               - comment
+ *             properties:
+ *               rating:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 5
+ *                 description: Rating from 1 to 5 stars
+ *               comment:
+ *                 type: string
+ *                 minLength: 10
+ *                 maxLength: 500
+ *                 description: Review comment
+ *               type:
+ *                 type: string
+ *                 default: booking
+ *                 description: Review type
+ *     responses:
+ *       201:
+ *         description: Review submitted successfully
+ *       400:
+ *         description: Invalid input or booking not eligible for review
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Booking not found
+ *       500:
+ *         description: Server error
+ */
+router.post("/bookings/:bookingId/review", auth, bookingController.submitBookingReview);
+
+// Debug endpoint to check bookings
+router.get("/api/user/bookings/debug", auth, async (req, res) => {
+  try {
+    const Booking = require("../models/booking");
+    
+    console.log("🔍 DEBUG: Checking bookings for user:", req.user._id);
+    
+    const totalBookings = await Booking.countDocuments({ user: req.user._id });
+    const bookingsByStatus = await Booking.aggregate([
+      { $match: { user: req.user._id } },
+      { $group: { _id: "$status", count: { $sum: 1 } } }
+    ]);
+    
+    const recentBookings = await Booking.find({ user: req.user._id })
+      .select('_id serviceName status paymentStatus scheduledDate createdAt')
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
+    
+    res.json({
+      success: true,
+      debug: {
+        userId: req.user._id,
+        userEmail: req.user.email,
+        totalBookings,
+        bookingsByStatus,
+        recentBookings
+      }
+    });
+  } catch (error) {
+    console.error("Debug endpoint error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 router.put("/updateFcmToken", userController.updateFcmToken);
 router.delete('/deleteduser',auth,userController.deleteUser)
 
@@ -808,6 +901,9 @@ router.get("/bookings/:bookingId/quotations", auth, quotationController.getQuota
 router.get("/quotations/:quotationId", auth, quotationController.getQuotationById);
 router.post("/quotations/:quotationId/accept", auth, quotationController.customerAcceptQuotation);
 router.post("/quotations/:quotationId/reject", auth, quotationController.customerRejectQuotation);
+
+// Material Quotation Route (Public - no auth required)
+router.post("/quotations/material-request", quotationController.submitMaterialQuotationRequest);
 
 // Dashboard Routes - Enhanced with time-based insights
 router.get("/dashboard", auth, dashboardController.getEnhancedDashboard);

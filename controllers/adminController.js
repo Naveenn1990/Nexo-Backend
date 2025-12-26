@@ -1052,19 +1052,28 @@ exports.getPartnerRevenueStats = async (req, res) => {
     // Get approved partner IDs for filtering transactions
     const approvedPartnerIds = approvedPartners.map(partner => partner._id);
 
-    // Calculate total registration fees from PaymentTransaction collection - only for approved partners
+    // Use approved partners for all calculations
+    const allPartners = approvedPartners;
+
+    // Calculate total registration fees from Partner model
+    let totalRegistrationFeesFromPartners = allPartners.reduce((sum, partner) => {
+      return sum + (partner.profile?.registerAmount || 0);
+    }, 0);
+
+    // Also check PaymentTransaction collection for registration fees - only for approved partners
     const registrationTransactions = await PaymentTransaction.find({
       feeType: 'registration',
       status: 'success',
       partnerId: { $in: approvedPartnerIds }
     }).lean();
     
-    const totalRegistrationFees = registrationTransactions.reduce((sum, txn) => {
+    let totalRegistrationFeesFromTransactions = registrationTransactions.reduce((sum, txn) => {
       return sum + (txn.amount || 0);
     }, 0);
 
-    // Use approved partners for security deposit, toolkit, and MG Plan revenue calculation
-    const allPartners = approvedPartners;
+    // Use the higher value between Partner model and PaymentTransaction
+    // This ensures we capture all registration fees regardless of where they're stored
+    const totalRegistrationFees = Math.max(totalRegistrationFeesFromPartners, totalRegistrationFeesFromTransactions);
 
     // Calculate total security deposit fees from Partner model
     let totalSecurityDepositFromPartners = allPartners.reduce((sum, partner) => {

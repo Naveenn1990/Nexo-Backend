@@ -302,7 +302,8 @@ exports.getAllPurchaseOrders = async (req, res) => {
     // Format for display
     const formattedOrders = orders.map(order => ({
       ...order,
-      items: order.items.map(item => `${item.name} (${item.quantity})`).join(', '),
+      itemsDisplay: order.items.map(item => `${item.name} (${item.quantity})`).join(', '), // For table display
+      // Keep original items array for detailed view
       value: `₹${order.totalValue.toLocaleString()}`,
       eta: order.expectedDeliveryDate ? new Date(order.expectedDeliveryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : 'N/A'
     }));

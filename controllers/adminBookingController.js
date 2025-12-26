@@ -242,6 +242,31 @@ exports.getAllBookings = async (req, res) => {
 
         // Step 5: Format the bookings
         const formattedBookings = bookings.map(booking => {
+            // Debug: Log booking structure for service name issues
+            if (!booking.serviceName && !booking.subService?.service?.name && !booking.subService?.name) {
+                console.log('🔍 Booking with missing service name:', {
+                    id: booking._id,
+                    serviceName: booking.serviceName,
+                    subService: booking.subService,
+                    serviceData: booking.serviceData,
+                    cartItems: booking.cartItems,
+                    // Log all available fields to understand the structure
+                    allFields: Object.keys(booking),
+                    // Check if there are any service-related fields
+                    serviceFields: Object.keys(booking).filter(key => key.toLowerCase().includes('service'))
+                });
+            } else {
+                // Log successful service name resolution
+                console.log('✅ Service name resolved for booking:', {
+                    id: booking._id,
+                    resolvedServiceName: booking.serviceName || 
+                                       booking.subService?.service?.name || 
+                                       booking.subService?.name || 
+                                       booking.serviceData?.name ||
+                                       (booking.cartItems && booking.cartItems.length > 0 ? booking.cartItems[0].name : 'fallback')
+                });
+            }
+            
             // Partner name handling - preserve original names, only clean if corrupted
             let partnerName = 'Still not assigned';
             let partnerPhone = 'N/A';
@@ -302,7 +327,55 @@ exports.getAllBookings = async (req, res) => {
                 customerName: booking.user?.name || 'N/A',
                 customerEmail: booking.user?.email || 'N/A',
                 customerPhone: booking.user?.phone || 'N/A',
-                serviceName: booking.subService?.service?.name || 'N/A',
+                serviceName: (() => {
+                    // First try the direct serviceName field
+                    if (booking.serviceName) return booking.serviceName;
+                    
+                    // Try serviceData (this contains the main service info)
+                    if (booking.serviceData) {
+                        if (typeof booking.serviceData === 'object' && booking.serviceData.name) {
+                            return booking.serviceData.name;
+                        }
+                        if (typeof booking.serviceData === 'string') {
+                            try {
+                                const parsed = JSON.parse(booking.serviceData);
+                                if (parsed.name) return parsed.name;
+                            } catch (e) {
+                                // Not JSON, might be a plain string
+                            }
+                        }
+                    }
+                    
+                    // Try to get from cart items array (this is where the actual booked items are)
+                    if (booking.cartItems && booking.cartItems.length > 0) {
+                        // If there's only one item, use its name
+                        if (booking.cartItems.length === 1) {
+                            const item = booking.cartItems[0];
+                            if (item.name) return item.name;
+                            if (item.serviceName) return item.serviceName;
+                        } else {
+                            // If multiple items, create a descriptive name
+                            const itemNames = booking.cartItems
+                                .map(item => item.name || item.serviceName)
+                                .filter(name => name)
+                                .slice(0, 2); // Take first 2 items
+                            
+                            if (itemNames.length > 0) {
+                                const serviceName = itemNames.join(', ');
+                                return booking.cartItems.length > 2 
+                                    ? `${serviceName} + ${booking.cartItems.length - 2} more`
+                                    : serviceName;
+                            }
+                        }
+                    }
+                    
+                    // Try subService as fallback
+                    if (booking.subService?.service?.name) return booking.subService.service.name;
+                    if (booking.subService?.name) return booking.subService.name;
+                    
+                    // Final fallback
+                    return 'Service Booking';
+                })(),
                 categoryName: booking.subService?.service?.subCategory?.category?.name || 'N/A',
                 partner: booking.partner,
                 partnerId: booking.partner?._id || 'N/A',
@@ -316,7 +389,12 @@ exports.getAllBookings = async (req, res) => {
                     : 'N/A',
                 partnerProfilePicture: booking.partner?.profilePicture || 'N/A',
                 amount: booking.amount || 0,
+                totalAmount: booking.totalAmount || booking.amount || 0,
+                gstAmount: booking.gstAmount || 0,
+                cartItems: booking.cartItems || [],
+                cartTotal: booking.cartTotal || booking.amount || 0,
                 paymentMode: booking.paymentMode || 'N/A',
+                paymentStatus: booking.paymentStatus || 'N/A',
                 status: booking.status || 'N/A',
                 scheduledDate: booking.scheduledDate,
                 scheduledTime: booking.scheduledTime,
@@ -327,6 +405,8 @@ exports.getAllBookings = async (req, res) => {
                 photos: booking.photos || [], // Add photos
                 videos: booking.videos || [], // Add videos
                 completedAt: booking.completedAt || null, // Add completion date
+                customerDetails: booking.customerDetails || null, // Add customer details
+                specialInstructions: booking.specialInstructions || null, // Add special instructions
                 location: {
                     address: booking.location?.address || 'N/A',
                     landmark: booking.location?.landmark || 'N/A',

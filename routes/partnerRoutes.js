@@ -300,8 +300,22 @@ router.get(
 ); // Get products by category
 // router.put('/products/use/:id', auth, partnerServiceController.useProduct); // Use product (decrease stock)
 // router.put('/products/return/:id', auth, partnerServiceController.returnProduct); // Return product (increase stock)
-router.post("/products/add", auth, partnerServiceController.addToCart); // Add new product
-router.put('/product/removecart',auth,partnerServiceController.removeCart);
+router.post("/products/add", auth, partnerServiceController.addToCart); // Add product to cart
+router.get("/cart", auth, partnerServiceController.getCart); // Get partner's cart
+router.delete("/cart/remove", auth, partnerServiceController.removeFromCart); // Remove item from cart
+router.delete("/cart/clear", auth, partnerServiceController.clearCart); // Clear entire cart
+
+// Spare Parts Order Management
+router.post("/orders/place", auth, partnerServiceController.placeOrder); // Place order from cart
+router.post("/orders/payment/initiate", auth, partnerServiceController.initiateOrderPayment); // Initiate payment for order
+router.get("/orders", auth, partnerServiceController.getOrders); // Get partner's orders
+router.get("/orders/:orderId", auth, partnerServiceController.getOrderDetails); // Get order details
+
+// Order Payment Callbacks (public routes - called by PayU)
+router.post("/order-payment-success", partnerServiceController.orderPaymentSuccess); // PayU success callback
+router.post("/order-payment-failure", partnerServiceController.orderPaymentFailure); // PayU failure callback
+
+router.put('/product/removecart',auth,partnerServiceController.removeCart); // Remove from booking cart (legacy)
 
 router.put("/products/addmanulcart",upload.any(), auth, partnerServiceController.AddManulProductCart); // Get cart items
 

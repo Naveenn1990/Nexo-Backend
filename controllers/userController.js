@@ -671,19 +671,7 @@ exports.getProfile = async (req, res, next) => {
 
     res.json({
       success: true,
-      user,
-      // : {
-      //   name: user.name,
-      //   email: user.email,
-      //   phone: user.phone,
-      //   address: user.address,
-      //   landmark: user.landmark,
-      //   addressType: user.addressType,
-      //   isVerified: user.isVerified,
-      //   status: user.status,
-      //   createdAt: user.createdAt,
-      //   updatedAt: user.updatedAt,
-      // },
+      user
     });
   } catch (error) {
     console.error("Get Profile Error:", {

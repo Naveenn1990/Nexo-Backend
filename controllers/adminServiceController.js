@@ -11,6 +11,39 @@ const Partner = require("../models/PartnerModel");
 const { uploadFile2, multifileUpload, handleFileUpload } = require('../middleware/aws');
 const PartnerWallet = require('../models/PartnerWallet');
 const MGPlan = require('../models/MGPlan');
+
+// 🆕 Helper function to create PaymentTransaction records for admin updates
+async function createAdminPaymentTransaction(partner, feeType, amount, description) {
+  try {
+    const { PaymentTransaction } = require('../models/RegisterFee');
+    const timestamp = Date.now();
+    
+    await PaymentTransaction.create({
+      partnerId: partner._id.toString(),
+      amount: amount,
+      status: 'success',
+      paymentMethod: 'manual',
+      transactionId: `ADMIN-${feeType.toUpperCase()}-${partner._id}-${timestamp}`,
+      feeType: feeType,
+      description: `${description} - ${feeType.replace('_', ' ')} fee updated by admin`,
+      source: 'admin',
+      metadata: {
+        source: 'admin',
+        partnerName: partner.profile?.name || 'Unknown',
+        partnerPhone: partner.phone,
+        partnerEmail: partner.profile?.email,
+        adminUpdate: true,
+        updatedBy: 'Admin',
+        updatedAt: new Date()
+      }
+    });
+    
+    console.log(`✅ Admin payment transaction recorded: ${feeType} ₹${amount} for partner ${partner._id}`);
+  } catch (error) {
+    console.error('❌ Error creating admin payment transaction:', error);
+    // Don't fail the main operation
+  }
+}
 // Get all services
 exports.getAllServices = async (req, res) => {
   try {
@@ -1702,7 +1735,14 @@ exports.updatePartnerProfile = async (req, res) => {
     
     // Update Payment Info in profile
     if (registerAmount !== undefined && registerAmount !== '') {
-      updatedPartner.profile.registerAmount = parseFloat(registerAmount) || 0;
+      const newRegisterAmount = parseFloat(registerAmount) || 0;
+      const oldRegisterAmount = updatedPartner.profile.registerAmount || 0;
+      updatedPartner.profile.registerAmount = newRegisterAmount;
+      
+      // 🆕 CREATE PAYMENT TRANSACTION IF AMOUNT CHANGED
+      if (newRegisterAmount !== oldRegisterAmount && newRegisterAmount > 0) {
+        await createAdminPaymentTransaction(updatedPartner, 'registration', newRegisterAmount, 'Admin Update');
+      }
     }
     if (payId !== undefined) {
       updatedPartner.profile.payId = payId;
@@ -1711,10 +1751,24 @@ exports.updatePartnerProfile = async (req, res) => {
       updatedPartner.profile.paidBy = paidBy;
     }
     if (securityDeposit !== undefined && securityDeposit !== '') {
-      updatedPartner.profile.securityDeposit = parseFloat(securityDeposit) || 0;
+      const newSecurityDeposit = parseFloat(securityDeposit) || 0;
+      const oldSecurityDeposit = updatedPartner.profile.securityDeposit || 0;
+      updatedPartner.profile.securityDeposit = newSecurityDeposit;
+      
+      // 🆕 CREATE PAYMENT TRANSACTION IF AMOUNT CHANGED
+      if (newSecurityDeposit !== oldSecurityDeposit && newSecurityDeposit > 0) {
+        await createAdminPaymentTransaction(updatedPartner, 'security_deposit', newSecurityDeposit, 'Admin Update');
+      }
     }
     if (toolkitPrice !== undefined && toolkitPrice !== '') {
-      updatedPartner.profile.toolkitPrice = parseFloat(toolkitPrice) || 0;
+      const newToolkitPrice = parseFloat(toolkitPrice) || 0;
+      const oldToolkitPrice = updatedPartner.profile.toolkitPrice || 0;
+      updatedPartner.profile.toolkitPrice = newToolkitPrice;
+      
+      // 🆕 CREATE PAYMENT TRANSACTION IF AMOUNT CHANGED
+      if (newToolkitPrice !== oldToolkitPrice && newToolkitPrice > 0) {
+        await createAdminPaymentTransaction(updatedPartner, 'toolkit', newToolkitPrice, 'Admin Update');
+      }
     }
     
     // Update Profile Completion Status

@@ -219,7 +219,11 @@ const statsSchema = new mongoose.Schema({
 const paymentTransactionSchema = new mongoose.Schema({
   partnerId: {
     type: String,
-    required: true
+    required: function() { return !this.userId; } // Required if userId is not present
+  },
+  userId: {
+    type: String,
+    required: function() { return !this.partnerId; } // Required if partnerId is not present
   },
   amount: {
     type: Number,
@@ -232,7 +236,7 @@ const paymentTransactionSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['upi', 'card', 'netbanking', 'wallet', 'whatsapp'],
+    enum: ['upi', 'card', 'netbanking', 'wallet', 'whatsapp', 'cash', 'manual', 'phonepe', 'payu'],
     required: true
   },
   transactionId: {
@@ -247,12 +251,17 @@ const paymentTransactionSchema = new mongoose.Schema({
   },
   feeType: {
     type: String,
-    enum: ['registration', 'security_deposit', 'toolkit', 'mg_plan', 'lead_fee', 'other'],
+    enum: ['registration', 'security_deposit', 'toolkit', 'mg_plan', 'lead_fee', 'amc_plan', 'subscription', 'wallet_recharge', 'other'],
     default: 'other'
   },
   description: {
     type: String,
     default: ''
+  },
+  source: {
+    type: String,
+    enum: ['partner', 'user', 'admin'],
+    default: 'partner'
   },
   metadata: {
     type: mongoose.Schema.Types.Mixed,

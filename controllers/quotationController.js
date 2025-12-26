@@ -5,6 +5,7 @@ const Partner = require('../models/PartnerModel');
 const Admin = require('../models/admin');
 const Notification = require('../models/Notification');
 const { sendPartnerNotification, sendAdminNotification, sendAllAdminsNotification } = require('../services/notificationService');
+const { sendMaterialQuotationNotifications } = require('../services/materialNotificationService');
 const firebaseAdmin = require('../config/firebase');
 
 // Create quotation (Partner)
@@ -678,3 +679,378 @@ exports.getQuotationById = async (req, res) => {
   }
 };
 
+// Submit material quotation request (Public endpoint)
+exports.submitMaterialQuotationRequest = async (req, res) => {
+  try {
+    const { 
+      name, phone, email, requirements, category, brandPreference, 
+      // New customer and technician details
+      customerName, customerPhone, customerEmail, customerAddress,
+      technicianName, technicianPhone, technicianId, serviceType,
+      urgency, notes, selectedItems, totalAmount,
+      type = 'material' 
+    } = req.body;
+
+    console.log('📋 ============================================');
+    console.log('📋 ENHANCED MATERIAL QUOTATION REQUEST');
+    console.log('📋 ============================================');
+    console.log('   Partner Name:', name);
+    console.log('   Partner Phone:', phone);
+    console.log('   Customer Name:', customerName);
+    console.log('   Customer Phone:', customerPhone);
+    console.log('   Technician Name:', technicianName);
+    console.log('   Service Type:', serviceType);
+    console.log('   Urgency:', urgency);
+    console.log('   Total Amount:', totalAmount);
+    console.log('   Selected Items:', selectedItems ? Object.keys(selectedItems).length : 0, 'categories');
+    console.log('📋 ============================================');
+
+    // Enhanced validation
+    if (!name || !phone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Partner name and phone are required'
+      });
+    }
+
+    if (!customerName || !customerPhone || !customerAddress) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer name, phone, and address are required'
+      });
+    }
+
+    if (!technicianName || !technicianPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Technician name and phone are required'
+      });
+    }
+
+    if (!serviceType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Service type is required'
+      });
+    }
+
+    // Create enhanced material quotation request
+    const materialRequest = {
+      type: 'material_quotation',
+      // Partner details
+      partnerName: name.trim(),
+      partnerPhone: phone.trim(),
+      partnerEmail: email?.trim() || '',
+      // Customer details
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+      customerEmail: customerEmail?.trim() || '',
+      customerAddress: customerAddress.trim(),
+      // Technician details
+      technicianName: technicianName.trim(),
+      technicianPhone: technicianPhone.trim(),
+      technicianId: technicianId?.trim() || '',
+      // Service details
+      serviceType: serviceType,
+      urgency: urgency || 'normal',
+      category: category || 'general',
+      brandPreference: brandPreference?.trim() || '',
+      requirements: requirements?.trim() || '',
+      notes: notes?.trim() || '',
+      selectedItems: selectedItems || {},
+      totalAmount: totalAmount || 0,
+      requestId: `MQ-${Date.now()}`,
+      createdAt: new Date()
+    };
+
+    // Enhanced admin notification
+    try {
+      const urgencyText = urgency === 'emergency' ? '🚨 EMERGENCY' : urgency === 'urgent' ? '⚡ URGENT' : '📋 NORMAL';
+      const brandText = brandPreference ? ` (Brand: ${brandPreference})` : '';
+      const amountText = totalAmount ? ` - Est. ₹${totalAmount.toLocaleString('en-IN')}` : '';
+      
+      const adminNotificationResult = await sendAllAdminsNotification(
+        `${urgencyText} Material Quotation Request`,
+        `Partner: ${name} | Customer: ${customerName} (${customerPhone}) | Technician: ${technicianName} | Service: ${serviceType}${amountText}${brandText}`,
+        urgency === 'emergency' ? 'urgent' : 'info'
+      );
+      
+      if (adminNotificationResult && adminNotificationResult.success) {
+        console.log(`[Notification] ✅ Enhanced material quotation notification sent to ${adminNotificationResult.sent || 0} admin(s)`);
+      } else {
+        console.error(`[Notification] ⚠️ Enhanced material quotation notification may have failed`);
+      }
+    } catch (adminNotifError) {
+      console.error('[Notification] ❌ Failed to send admin notification for material quotation');
+      console.error('[Notification] Error:', adminNotifError.message || adminNotifError);
+    }
+
+    // Save enhanced notification to database
+    try {
+      const admins = await Admin.find({});
+      
+      for (const admin of admins) {
+        const notification = new Notification({
+          userId: admin._id,
+          userType: 'admin',
+          title: `${urgency === 'emergency' ? '🚨 EMERGENCY' : urgency === 'urgent' ? '⚡ URGENT' : '📋'} Material Quotation Request`,
+          message: `Partner: ${name} | Customer: ${customerName} | Technician: ${technicianName} | Service: ${serviceType}${amountText}`,
+          type: 'material_quotation',
+          data: JSON.stringify(materialRequest),
+          skipFcm: true // Already sent via sendAllAdminsNotification
+        });
+        await notification.save();
+      }
+      console.log(`[Database] ✅ Enhanced material quotation request saved to admin notifications`);
+    } catch (dbError) {
+      console.error('[Database] Error saving enhanced material quotation request:', dbError);
+    }
+
+    // Send comprehensive notifications to all parties
+    try {
+      await sendMaterialQuotationNotifications('quotation_submitted', materialRequest);
+      console.log('[Notifications] ✅ Comprehensive notifications sent to all parties');
+    } catch (notifError) {
+      console.error('[Notifications] Error sending comprehensive notifications:', notifError);
+    }
+
+    console.log('✅ Enhanced material quotation request processed successfully');
+    console.log('📋 ============================================');
+
+    res.status(201).json({
+      success: true,
+      message: `Material quotation request submitted successfully. ${urgency === 'emergency' ? 'Emergency request - Admin will contact within 2 hours.' : urgency === 'urgent' ? 'Urgent request - Admin will contact within 4 hours.' : 'Our team will contact you within 24 hours.'}`,
+      data: {
+        requestId: materialRequest.requestId,
+        customerName: customerName,
+        technicianName: technicianName,
+        serviceType: serviceType,
+        urgency: urgency,
+        estimatedAmount: totalAmount,
+        status: 'submitted'
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error submitting enhanced material quotation request:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error submitting material quotation request',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+
+// Admin approve material quotation (Admin endpoint)
+exports.adminApproveMaterialQuotation = async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { approvedAmount, deliveryDate, notes } = req.body;
+
+    console.log('🔍 ============================================');
+    console.log('🔍 ADMIN APPROVING MATERIAL QUOTATION');
+    console.log('🔍 ============================================');
+    console.log('   Request ID:', requestId);
+    console.log('   Approved Amount:', approvedAmount);
+    console.log('   Delivery Date:', deliveryDate);
+    console.log('🔍 ============================================');
+
+    // Find the original notification/request
+    const notification = await Notification.findOne({
+      type: 'material_quotation',
+      'data': { $regex: requestId }
+    });
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Material quotation request not found'
+      });
+    }
+
+    const originalData = JSON.parse(notification.data);
+
+    // Create approval data
+    const approvalData = {
+      ...originalData,
+      status: 'approved',
+      approvedAmount: approvedAmount,
+      deliveryDate: deliveryDate,
+      adminNotes: notes,
+      approvedAt: new Date(),
+      approvedBy: req.admin._id
+    };
+
+    // Send notifications to all parties
+    try {
+      await sendMaterialQuotationNotifications('quotation_approved', approvalData);
+      console.log('[Notifications] ✅ Approval notifications sent to all parties');
+    } catch (notifError) {
+      console.error('[Notifications] Error sending approval notifications:', notifError);
+    }
+
+    // Update the original notification
+    notification.message = `✅ APPROVED - ${notification.message}`;
+    await notification.save();
+
+    console.log('✅ Material quotation approved successfully');
+
+    res.status(200).json({
+      success: true,
+      message: 'Material quotation approved successfully. All parties have been notified.',
+      data: {
+        requestId: requestId,
+        approvedAmount: approvedAmount,
+        deliveryDate: deliveryDate,
+        status: 'approved'
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error approving material quotation:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error approving material quotation',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Admin mark materials as delivered (Admin endpoint)
+exports.adminMarkMaterialsDelivered = async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { deliveryNotes, deliveredBy } = req.body;
+
+    console.log('🚚 ============================================');
+    console.log('🚚 ADMIN MARKING MATERIALS AS DELIVERED');
+    console.log('🚚 ============================================');
+    console.log('   Request ID:', requestId);
+    console.log('   Delivered By:', deliveredBy);
+    console.log('🚚 ============================================');
+
+    // Find the original notification/request
+    const notification = await Notification.findOne({
+      type: 'material_quotation',
+      'data': { $regex: requestId }
+    });
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Material quotation request not found'
+      });
+    }
+
+    const originalData = JSON.parse(notification.data);
+
+    // Create delivery data
+    const deliveryData = {
+      ...originalData,
+      status: 'delivered',
+      deliveryNotes: deliveryNotes,
+      deliveredBy: deliveredBy,
+      deliveredAt: new Date(),
+      markedBy: req.admin._id
+    };
+
+    // Send notifications to all parties
+    try {
+      await sendMaterialQuotationNotifications('materials_delivered', deliveryData);
+      console.log('[Notifications] ✅ Delivery notifications sent to all parties');
+    } catch (notifError) {
+      console.error('[Notifications] Error sending delivery notifications:', notifError);
+    }
+
+    // Update the original notification
+    notification.message = `🚚 DELIVERED - ${notification.message}`;
+    await notification.save();
+
+    console.log('✅ Materials marked as delivered successfully');
+
+    res.status(200).json({
+      success: true,
+      message: 'Materials marked as delivered successfully. All parties have been notified.',
+      data: {
+        requestId: requestId,
+        deliveredBy: deliveredBy,
+        deliveredAt: new Date(),
+        status: 'delivered'
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error marking materials as delivered:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marking materials as delivered',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Get all material quotation requests (Admin endpoint)
+exports.getAllMaterialQuotations = async (req, res) => {
+  try {
+    const { status, urgency, serviceType, page = 1, limit = 20 } = req.query;
+
+    console.log('📋 Fetching material quotation requests...');
+
+    // Build query
+    const query = { type: 'material_quotation' };
+    
+    // Apply filters
+    if (status) {
+      query['data'] = { $regex: `"status":"${status}"` };
+    }
+
+    const notifications = await Notification.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .populate('userId', 'name email');
+
+    // Parse and format the data
+    const formattedRequests = notifications.map(notification => {
+      try {
+        const data = JSON.parse(notification.data);
+        return {
+          _id: notification._id,
+          requestId: data.requestId,
+          partnerName: data.partnerName,
+          partnerPhone: data.partnerPhone,
+          customerName: data.customerName,
+          customerPhone: data.customerPhone,
+          technicianName: data.technicianName,
+          technicianPhone: data.technicianPhone,
+          serviceType: data.serviceType,
+          urgency: data.urgency,
+          totalAmount: data.totalAmount,
+          status: data.status || 'pending',
+          createdAt: notification.createdAt,
+          title: notification.title,
+          message: notification.message
+        };
+      } catch (parseError) {
+        console.error('Error parsing notification data:', parseError);
+        return null;
+      }
+    }).filter(Boolean);
+
+    const total = await Notification.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      count: formattedRequests.length,
+      total: total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit),
+      data: formattedRequests
+    });
+  } catch (error) {
+    console.error('❌ Error fetching material quotations:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching material quotations',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

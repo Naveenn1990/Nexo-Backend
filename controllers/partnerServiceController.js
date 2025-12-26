@@ -716,6 +716,38 @@ async function deductWallet(updatedBooking, partnerDoc, leadFee, minBalance) {
     });
     await wallet.save();
 
+    // 🆕 CREATE PAYMENT TRANSACTION RECORD FOR LEAD FEE
+    try {
+      const { PaymentTransaction } = require('../models/RegisterFee');
+      const timestamp = Date.now();
+      
+      await PaymentTransaction.create({
+        partnerId: partnerDoc._id.toString(),
+        amount: deductionAmount,
+        status: 'success',
+        paymentMethod: 'wallet',
+        transactionId: `LEAD-${partnerDoc._id}-${timestamp}`,
+        feeType: 'lead_fee',
+        description: `Lead acceptance fee - ${updatedBooking.subService?.name || 'service'} - Booking: ${updatedBooking._id}`,
+        source: 'partner',
+        metadata: {
+          source: 'partner',
+          partnerName: partnerDoc.profile?.name || 'Unknown',
+          partnerPhone: partnerDoc.phone,
+          partnerEmail: partnerDoc.profile?.email,
+          bookingId: updatedBooking._id?.toString(),
+          serviceName: updatedBooking.subService?.name,
+          walletBalanceAfter: wallet.balance,
+          leadFeeDeduction: true
+        }
+      });
+      
+      console.log(`✅ Lead fee transaction recorded: ₹${deductionAmount} for partner ${partnerDoc._id}`);
+    } catch (txnError) {
+      console.error('❌ Error recording lead fee transaction:', txnError);
+      // Don't fail the main operation if transaction recording fails
+    }
+
     if (wallet.balance < minBalance) {
       partnerDoc.leadAcceptancePaused = true;
     } else {
@@ -1899,9 +1931,25 @@ exports.getPartnerBookings = async (req, res) => {
 // ✅ Get all products by category (For partners)
 exports.getProductsByCategory = async (req, res) => {
   try {
-
     const { category } = req.params; // Extract category IDs from URL
-    const categoryIds = category.split(',').map(id => new mongoose.Types.ObjectId(id.trim()));
+    
+    // Validate category parameter
+    if (!category) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Category ID is required" 
+      });
+    }
+
+    // Handle comma-separated category IDs
+    const categoryIds = category.split(',').map(id => {
+      const trimmedId = id.trim();
+      // Validate if it's a valid MongoDB ObjectId
+      if (!mongoose.Types.ObjectId.isValid(trimmedId)) {
+        throw new Error(`Invalid category ID: ${trimmedId}`);
+      }
+      return new mongoose.Types.ObjectId(trimmedId);
+    });
 
     console.log("Received categoryIds:", categoryIds);
 
@@ -1911,26 +1959,40 @@ exports.getProductsByCategory = async (req, res) => {
       stock: { $gt: 0 },
     });
 
-    if (products.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No products found for this category" });
-    }
+    console.log(`Found ${products.length} products for categories:`, categoryIds);
 
-    res.status(200).json(products);
+    // Return success response even if no products found
+    res.status(200).json({
+      success: true,
+      count: products.length,
+      data: products,
+      message: products.length === 0 ? "No products found for this category" : "Products fetched successfully"
+    });
+
   } catch (error) {
     console.error("Error fetching products by category:", error);
-    res
-      .status(500)
-      .json({ message: "Error fetching products", error: error.message });
+    
+    // Handle specific error types
+    if (error.message.includes('Invalid category ID')) {
+      return res.status(400).json({ 
+        success: false,
+        message: error.message 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      message: "Error fetching products", 
+      error: error.message 
+    });
   }
 };
 
 // add to cart (Products)
-// Add Product to Booking Cart
+// Add Product to Cart (General Cart or Booking Cart)
 exports.addToCart = async (req, res) => {
   try {
-    const { bookingId, productId, change } = req.body;
+    const { bookingId, productId, quantity, change } = req.body;
     const partnerId = req.partner.id; // Assuming partner authentication is handled
 
     // Validate Partner
@@ -1945,54 +2007,100 @@ exports.addToCart = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    // Validate Booking (Ensure it belongs to this partner & is accepted)
-    let booking = await Booking.findOne({
-      _id: bookingId,
-      partner: partnerId, // Ensure booking belongs to this partner
+    // If bookingId is provided, add to booking cart (existing functionality)
+    if (bookingId) {
+      // Validate Booking (Ensure it belongs to this partner & is accepted)
+      let booking = await Booking.findOne({
+        _id: bookingId,
+        partner: partnerId, // Ensure booking belongs to this partner
+      });
 
-    });
-
-    if (!booking) {
-      return res.status(400).json({ message: "Invalid or unaccepted booking" });
-    }
-
-    // Initialize cart if empty
-    if (!booking.cart) {
-      booking.cart = [];
-    }
-
-    // Check if product already exists in cart
-    const existingItemIndex = booking.cart.findIndex(
-      (item) => item.product.toString() === productId
-    );
-
-    if (existingItemIndex !== -1) {
-      // Update quantity
-      booking.cart[existingItemIndex].quantity = change;
-      booking.cart[existingItemIndex].approved = false
-      // Remove item if quantity is 0 or negative
-      if (booking.cart[existingItemIndex].quantity <= 0) {
-        booking.cart.splice(existingItemIndex, 1);
-
+      if (!booking) {
+        return res.status(400).json({ message: "Invalid or unaccepted booking" });
       }
-    } else if (change > 0) {
-      // Add new product to cart
-      booking.cart.push({
-        product: productId,
-        quantity: change,
-        approved: false,
-        addedByPartner: partnerId, // Store partner details
+
+      // Initialize cart if empty
+      if (!booking.cart) {
+        booking.cart = [];
+      }
+
+      const finalQuantity = change || quantity || 1;
+
+      // Check if product already exists in cart
+      const existingItemIndex = booking.cart.findIndex(
+        (item) => item.product.toString() === productId
+      );
+
+      if (existingItemIndex !== -1) {
+        // Update quantity
+        booking.cart[existingItemIndex].quantity = finalQuantity;
+        booking.cart[existingItemIndex].approved = false;
+        // Remove item if quantity is 0 or negative
+        if (booking.cart[existingItemIndex].quantity <= 0) {
+          booking.cart.splice(existingItemIndex, 1);
+        }
+      } else if (finalQuantity > 0) {
+        // Add new product to cart
+        booking.cart.push({
+          product: productId,
+          quantity: finalQuantity,
+          approved: false,
+          addedByPartner: partnerId, // Store partner details
+        });
+      }
+
+      // Save the updated booking with the modified cart
+      booking = await booking.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Cart updated successfully",
+        cart: booking.cart,
+      });
+    } else {
+      // General cart functionality (without booking)
+      // Initialize partner cart if it doesn't exist
+      if (!partner.cart) {
+        partner.cart = [];
+      }
+
+      const finalQuantity = quantity || 1;
+
+      // Check if product already exists in partner's cart
+      const existingItemIndex = partner.cart.findIndex(
+        (item) => item.product.toString() === productId
+      );
+
+      if (existingItemIndex !== -1) {
+        // Update quantity
+        partner.cart[existingItemIndex].quantity = finalQuantity;
+        // Remove item if quantity is 0 or negative
+        if (partner.cart[existingItemIndex].quantity <= 0) {
+          partner.cart.splice(existingItemIndex, 1);
+        }
+      } else if (finalQuantity > 0) {
+        // Add new product to cart
+        partner.cart.push({
+          product: productId,
+          quantity: finalQuantity,
+          addedAt: new Date(),
+        });
+      }
+
+      // Save the updated partner with the modified cart
+      await partner.save();
+
+      // Populate product details for response
+      await partner.populate('cart.product');
+
+      return res.status(200).json({
+        success: true,
+        message: "Product added to cart successfully",
+        cart: partner.cart,
       });
     }
-
-    // Save the updated booking with the modified cart
-    booking = await booking.save();
-
-    return res.status(200).json({
-      message: "Cart updated successfully",
-      cart: booking.cart,
-    });
   } catch (error) {
+    console.error('Add to cart error:', error);
     return res
       .status(500)
       .json({ message: "Error updating cart", error: error.message });
@@ -2013,6 +2121,474 @@ exports.removeCart = async (req, res) => {
 
   }
 }
+
+// Get Partner's Cart
+exports.getCart = async (req, res) => {
+  try {
+    const partnerId = req.partner.id;
+    
+    const partner = await Partner.findById(partnerId)
+      .populate({
+        path: 'cart.product',
+        select: 'name description price stock unit category'
+      });
+    
+    if (!partner) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Partner not found" 
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Cart retrieved successfully",
+      cart: partner.cart || [],
+      cartCount: partner.cart ? partner.cart.length : 0
+    });
+  } catch (error) {
+    console.error('Get cart error:', error);
+    return res.status(500).json({ 
+      success: false,
+      message: "Error retrieving cart", 
+      error: error.message 
+    });
+  }
+};
+
+// Remove item from Partner's Cart
+exports.removeFromCart = async (req, res) => {
+  try {
+    const { productId } = req.body;
+    const partnerId = req.partner.id;
+
+    const partner = await Partner.findById(partnerId);
+    if (!partner) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Partner not found" 
+      });
+    }
+
+    // Remove the product from cart
+    partner.cart = partner.cart.filter(
+      item => item.product.toString() !== productId
+    );
+
+    await partner.save();
+
+    // Populate product details for response
+    await partner.populate('cart.product');
+
+    return res.status(200).json({
+      success: true,
+      message: "Product removed from cart successfully",
+      cart: partner.cart
+    });
+  } catch (error) {
+    console.error('Remove from cart error:', error);
+    return res.status(500).json({ 
+      success: false,
+      message: "Error removing product from cart", 
+      error: error.message 
+    });
+  }
+};
+
+// Clear Partner's Cart
+exports.clearCart = async (req, res) => {
+  try {
+    const partnerId = req.partner.id;
+
+    const partner = await Partner.findById(partnerId);
+    if (!partner) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Partner not found" 
+      });
+    }
+
+    partner.cart = [];
+    await partner.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Cart cleared successfully",
+      cart: []
+    });
+  } catch (error) {
+    console.error('Clear cart error:', error);
+    return res.status(500).json({ 
+      success: false,
+      message: "Error clearing cart", 
+      error: error.message 
+    });
+  }
+};
+
+// Place Order for Spare Parts
+exports.placeOrder = async (req, res) => {
+  try {
+    const partnerId = req.partner.id;
+    const { deliveryAddress, notes } = req.body;
+
+    // Validate partner
+    const partner = await Partner.findById(partnerId)
+      .populate('cart.product');
+    
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Partner not found"
+      });
+    }
+
+    // Check if cart is not empty
+    if (!partner.cart || partner.cart.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cart is empty. Add products before placing order."
+      });
+    }
+
+    // Validate delivery address
+    if (!deliveryAddress || !deliveryAddress.name || !deliveryAddress.phone || !deliveryAddress.addressLine1 || !deliveryAddress.pincode) {
+      return res.status(400).json({
+        success: false,
+        message: "Complete delivery address is required (name, phone, address, pincode)"
+      });
+    }
+
+    // Prepare order items from cart
+    const orderItems = partner.cart.map(cartItem => {
+      const product = cartItem.product;
+      const quantity = cartItem.quantity;
+      const price = product.price;
+      const total = price * quantity;
+
+      return {
+        product: product._id,
+        quantity,
+        price,
+        total
+      };
+    });
+
+    // Calculate order totals
+    const subtotal = orderItems.reduce((sum, item) => sum + item.total, 0);
+    const tax = Math.round(subtotal * 0.18); // 18% GST
+    const shippingCharges = subtotal > 1000 ? 0 : 50; // Free shipping above ₹1000
+    const totalAmount = subtotal + tax + shippingCharges;
+
+    // Create order
+    const SparePartOrder = require('../models/SparePartOrder');
+    const order = new SparePartOrder({
+      partner: partnerId,
+      items: orderItems,
+      subtotal,
+      tax,
+      shippingCharges,
+      totalAmount,
+      delivery: {
+        address: deliveryAddress
+      },
+      notes: {
+        customer: notes || ''
+      },
+      statusHistory: [{
+        status: 'pending',
+        timestamp: new Date(),
+        updatedBy: 'partner',
+        remarks: 'Order placed by partner'
+      }]
+    });
+
+    await order.save();
+
+    // Clear partner's cart after successful order placement
+    partner.cart = [];
+    await partner.save();
+
+    // Populate order with product details for response
+    await order.populate('items.product', 'name description price unit');
+    await order.populate('partner', 'profile.name profile.email phone');
+
+    return res.status(201).json({
+      success: true,
+      message: "Order placed successfully",
+      order: {
+        orderId: order.orderId,
+        _id: order._id,
+        items: order.items,
+        subtotal: order.subtotal,
+        tax: order.tax,
+        shippingCharges: order.shippingCharges,
+        totalAmount: order.totalAmount,
+        status: order.status,
+        payment: order.payment,
+        delivery: order.delivery,
+        createdAt: order.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Place order error:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Error placing order",
+      error: error.message
+    });
+  }
+};
+
+// Initiate Payment for Spare Parts Order
+exports.initiateOrderPayment = async (req, res) => {
+  try {
+    const { orderId } = req.body;
+    const partnerId = req.partner.id;
+
+    // Find the order
+    const SparePartOrder = require('../models/SparePartOrder');
+    const order = await SparePartOrder.findOne({
+      _id: orderId,
+      partner: partnerId
+    }).populate('partner', 'profile.name profile.email phone');
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    // Check if order is in pending status
+    if (order.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: "Order is not in pending status"
+      });
+    }
+
+    // Check if payment is already completed
+    if (order.payment.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: "Payment already completed for this order"
+      });
+    }
+
+    // Generate unique transaction ID
+    const txnid = `SPO${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+    // PayU Configuration
+    const PAYU_CONFIG = {
+      key: process.env.PAYU_MERCHANT_KEY || 'YOUR_MERCHANT_KEY',
+      salt: process.env.PAYU_MERCHANT_SALT || 'YOUR_MERCHANT_SALT',
+      baseUrl: process.env.PAYU_BASE_URL || 'https://test.payu.in',
+    };
+
+    // Generate PayU hash
+    const generatePayUHash = (data) => {
+      const { key, txnid, amount, productinfo, firstname, email, salt } = data;
+      const hashString = `${key}|${txnid}|${amount}|${productinfo}|${firstname}|${email}|||||||||||${salt}`;
+      return require('crypto').createHash('sha512').update(hashString).digest('hex');
+    };
+
+    // Prepare payment data
+    const paymentData = {
+      key: PAYU_CONFIG.key,
+      txnid,
+      amount: order.totalAmount.toString(),
+      productinfo: `Spare Parts Order - ${order.orderId}`,
+      firstname: order.partner.profile?.name || 'Partner',
+      email: order.partner.profile?.email || 'partner@nexo.com',
+      phone: order.partner.phone,
+      surl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/partner/order-payment-success`,
+      furl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/partner/order-payment-failure`,
+      salt: PAYU_CONFIG.salt,
+    };
+
+    // Generate hash
+    const hash = generatePayUHash(paymentData);
+
+    // Update order with transaction details
+    order.payment.transactionId = txnid;
+    order.payment.status = 'processing';
+    await order.save();
+
+    return res.json({
+      success: true,
+      message: "Payment initiated successfully",
+      data: {
+        ...paymentData,
+        hash,
+        action: `${PAYU_CONFIG.baseUrl}/_payment`,
+        orderId: order._id,
+        orderNumber: order.orderId
+      }
+    });
+
+  } catch (error) {
+    console.error('Initiate order payment error:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Error initiating payment",
+      error: error.message
+    });
+  }
+};
+
+// Get Partner's Orders
+exports.getOrders = async (req, res) => {
+  try {
+    const partnerId = req.partner.id;
+    const { status, page = 1, limit = 10 } = req.query;
+
+    // Build query
+    const query = { partner: partnerId };
+    if (status) {
+      query.status = status;
+    }
+
+    // Calculate pagination
+    const skip = (page - 1) * limit;
+
+    const SparePartOrder = require('../models/SparePartOrder');
+    
+    // Get orders with pagination
+    const orders = await SparePartOrder.find(query)
+      .populate('items.product', 'name description price unit')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    // Get total count for pagination
+    const totalOrders = await SparePartOrder.countDocuments(query);
+    const totalPages = Math.ceil(totalOrders / limit);
+
+    return res.json({
+      success: true,
+      message: "Orders retrieved successfully",
+      data: {
+        orders,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalOrders,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get orders error:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving orders",
+      error: error.message
+    });
+  }
+};
+
+// Get Order Details
+exports.getOrderDetails = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const partnerId = req.partner.id;
+
+    const SparePartOrder = require('../models/SparePartOrder');
+    const order = await SparePartOrder.findOne({
+      _id: orderId,
+      partner: partnerId
+    })
+      .populate('items.product', 'name description price unit category')
+      .populate('partner', 'profile.name profile.email phone');
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Order details retrieved successfully",
+      data: order
+    });
+
+  } catch (error) {
+    console.error('Get order details error:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving order details",
+      error: error.message
+    });
+  }
+};
+
+// Handle Order Payment Success
+exports.orderPaymentSuccess = async (req, res) => {
+  try {
+    const paymentData = req.body;
+    const { txnid, mihpayid, status, amount } = paymentData;
+    
+    console.log('🌐 Order Payment Success Callback:');
+    console.log('   Transaction ID:', txnid);
+    console.log('   PayU Payment ID:', mihpayid);
+    console.log('   Status:', status);
+    console.log('   Amount:', amount);
+
+    // Find order by transaction ID
+    const SparePartOrder = require('../models/SparePartOrder');
+    const order = await SparePartOrder.findOne({
+      'payment.transactionId': txnid
+    });
+
+    if (!order) {
+      console.error('❌ Order not found with transaction ID:', txnid);
+      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/partner/dashboard/spare-parts?payment=failed&reason=order_not_found`);
+    }
+
+    // Update order payment status
+    if (status === 'success') {
+      order.payment.status = 'completed';
+      order.payment.payuPaymentId = mihpayid;
+      order.payment.paymentDate = new Date();
+      order.status = 'confirmed';
+      
+      // Add to status history
+      order.statusHistory.push({
+        status: 'confirmed',
+        timestamp: new Date(),
+        updatedBy: 'system',
+        remarks: 'Payment completed successfully'
+      });
+      
+      console.log('✅ Order payment completed:', order.orderId);
+    } else {
+      order.payment.status = 'failed';
+      console.log('❌ Order payment failed:', order.orderId);
+    }
+
+    await order.save();
+
+    // Redirect based on status
+    if (status === 'success') {
+      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/partner/dashboard/spare-parts?payment=success&orderId=${order.orderId}&txnid=${txnid}`);
+    } else {
+      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/partner/dashboard/spare-parts?payment=failed&reason=payment_failed&orderId=${order.orderId}`);
+    }
+
+  } catch (error) {
+    console.error('❌ Order payment callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/partner/dashboard/spare-parts?payment=failed&reason=server_error`);
+  }
+};
+
+// Handle Order Payment Failure
+exports.orderPaymentFailure = exports.orderPaymentSuccess;
 
 exports.AddManulProductCart = async (req, res) => {
   try {

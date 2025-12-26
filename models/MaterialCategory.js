@@ -17,6 +17,10 @@ const materialCategorySchema = new mongoose.Schema({
       required: true,
       trim: true
     },
+    description: {
+      type: String,
+      default: ''
+    },
     priceMin: {
       type: Number,
       default: null
@@ -24,6 +28,35 @@ const materialCategorySchema = new mongoose.Schema({
     priceMax: {
       type: Number,
       default: null
+    },
+    stock: {
+      type: Number,
+      default: 0
+    },
+    unit: {
+      type: String,
+      default: 'pieces',
+      enum: ['pieces', 'kg', 'grams', 'liters', 'ml', 'meters', 'cm', 'feet', 'inches', 'sqft', 'sqm', 'boxes', 'packets', 'rolls', 'sets', 'pairs', 'units']
+    },
+    sku: {
+      type: String,
+      default: ''
+    },
+    brand: {
+      type: String,
+      default: ''
+    },
+    specifications: {
+      type: String,
+      default: ''
+    },
+    minOrderQuantity: {
+      type: Number,
+      default: 1
+    },
+    isActive: {
+      type: Boolean,
+      default: true
     }
   }],
   order: {

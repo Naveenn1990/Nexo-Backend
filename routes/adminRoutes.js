@@ -541,6 +541,11 @@ router.get("/quotations/:quotationId", adminAuth, quotationController.getQuotati
 router.put("/quotations/:quotationId/approve", adminAuth, quotationController.adminAcceptQuotation);
 router.put("/quotations/:quotationId/reject", adminAuth, quotationController.adminRejectQuotation);
 
+// Material Quotation Routes (Admin)
+router.get("/material-quotations", adminAuth, quotationController.getAllMaterialQuotations);
+router.put("/material-quotations/:requestId/approve", adminAuth, quotationController.adminApproveMaterialQuotation);
+router.put("/material-quotations/:requestId/delivered", adminAuth, quotationController.adminMarkMaterialsDelivered);
+
 // User Subscription Management (Admin)
 const userSubscriptionController = require("../controllers/userSubscriptionController");
 router.get("/user-subscriptions", adminAuth, userSubscriptionController.getAllSubscriptions);

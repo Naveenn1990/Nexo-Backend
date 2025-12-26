@@ -1865,6 +1865,29 @@ exports.addtransactionwallet = async (req, res) => {
       balance: data.balance,
     });
     data = await data.save();
+
+    // 🆕 CREATE PAYMENT TRANSACTION RECORD FOR WALLET TRANSACTIONS
+    try {
+      const { createWalletRechargeTransaction } = require('../utils/paymentTransactionHelper');
+      if (type === 'credit') {
+        await createWalletRechargeTransaction(
+          partner,
+          Number(amount),
+          'manual',
+          reference || `WALLET-${partner}-${Date.now()}`,
+          {
+            description: description,
+            reference: reference,
+            walletBalance: data.balance,
+            addedBy: 'partner'
+          }
+        );
+      }
+    } catch (txnError) {
+      console.error('❌ Error creating wallet transaction record:', txnError);
+      // Don't fail the main operation
+    }
+
     return res
       .status(200)
       .json({ message: "Successfully updated transaction", success: data });
@@ -2099,6 +2122,29 @@ exports.addtransactionwalletadmin = async (req, res) => {
       balance: data.balance,
     });
     data = await data.save();
+
+    // 🆕 CREATE PAYMENT TRANSACTION RECORD FOR ADMIN WALLET TRANSACTIONS
+    try {
+      const { createWalletRechargeTransaction } = require('../utils/paymentTransactionHelper');
+      if (type === 'credit') {
+        await createWalletRechargeTransaction(
+          partner,
+          Number(amount),
+          'manual',
+          reference || `ADMIN-WALLET-${partner}-${Date.now()}`,
+          {
+            description: description,
+            reference: reference,
+            walletBalance: data.balance,
+            addedBy: 'admin',
+            adminId: req.admin?._id
+          }
+        );
+      }
+    } catch (txnError) {
+      console.error('❌ Error creating admin wallet transaction record:', txnError);
+      // Don't fail the main operation
+    }
 
     // Send notification using notification service
     console.log(`💰 Wallet transaction completed: ${type} ₹${amount} for partner ${partner}`);

@@ -1,5 +1,4 @@
 const Booking = require("../models/booking");
-
 const User = require("../models/User");
 const Review = require("../models/Review");
 // const mongoose = require("mongoose");
@@ -746,12 +745,32 @@ exports.getAllBookingsWithFilters = async (req, res) => {
 exports.getUserBookings = async (req, res) => {
   try {
     const { status } = req.query;
-    console.log("Yessss");
+    console.log("📋 ============================================");
+    console.log("📋 FETCHING USER BOOKINGS (getUserBookings)");
+    console.log("📋 ============================================");
+    console.log("   User ID:", req.user._id);
+    console.log("   User Email:", req.user.email);
+    console.log("   Status filter:", status);
+    
+    // First, let's check if any bookings exist for this user at all
+    const totalUserBookings = await Booking.countDocuments({ user: req.user._id });
+    const tempBookings = await Booking.countDocuments({ user: req.user._id, status: 'temp' });
+    const confirmedBookings = await Booking.countDocuments({ user: req.user._id, status: 'confirmed' });
+    
+    console.log("   Total bookings for user:", totalUserBookings);
+    console.log("   Temp bookings:", tempBookings);
+    console.log("   Confirmed bookings:", confirmedBookings);
+    
     // Build query for user bookings
-    const query = { user: req.user._id };
-    if (status) {
-      query.status = status;
+    const query = { 
+      user: req.user._id,
+      status: { $ne: 'temp' } // Exclude temporary bookings
+    };
+    if (status && status !== 'temp') {
+      query.status = status; // Override only if not requesting temp bookings
     }
+    
+    console.log("   Query:", JSON.stringify(query, null, 2));
 
     // Fetch all bookings with full population
     const bookings = await Booking.find(query)
@@ -785,9 +804,47 @@ exports.getUserBookings = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean(); // Convert to plain JS objects for better performance
 
+    // Check for reviews for each booking
+    const bookingIds = bookings.map(b => b._id);
+    const reviews = await Review.find({
+      booking: { $in: bookingIds },
+      user: req.user._id
+    }).select('booking rating status');
+
+    // Create a map of booking reviews
+    const reviewMap = {};
+    reviews.forEach(review => {
+      reviewMap[review.booking.toString()] = {
+        hasReview: true,
+        userRating: review.rating,
+        reviewStatus: review.status
+      };
+    });
+
+    // Add review information to bookings
+    const bookingsWithReviews = bookings.map(booking => ({
+      ...booking,
+      hasReview: reviewMap[booking._id.toString()]?.hasReview || false,
+      userRating: reviewMap[booking._id.toString()]?.userRating || null,
+      reviewStatus: reviewMap[booking._id.toString()]?.reviewStatus || null,
+      reviewSubmitted: reviewMap[booking._id.toString()]?.hasReview || false
+    }));
+
+    console.log("   Total bookings found:", bookingsWithReviews.length);
+    console.log("   Bookings:", bookingsWithReviews.map(b => ({
+      id: b._id,
+      serviceName: b.serviceName,
+      status: b.status,
+      scheduledDate: b.scheduledDate,
+      amount: b.totalAmount || b.amount,
+      hasReview: b.hasReview,
+      userRating: b.userRating
+    })));
+    console.log("📋 ============================================");
+
     res.status(200).json({
       success: true,
-      data: { bookings },
+      data: { bookings: bookingsWithReviews },
     });
   } catch (error) {
     console.error("Error in getUserBookings:", error);
@@ -807,19 +864,44 @@ exports.getBookingDetails = async (req, res) => {
     const booking = await Booking.findOne({
       _id: bookingId,
       user: req.user._id,
-    }).populate({
+    })
+    .populate({
       path: "subService",
       populate: {
         path: "category",
         select: "name",
       },
-    });
+    })
+    .populate({
+      path: "partner",
+      select: "profile.name phone profile.email profile.address profile.city profile.pincode",
+    })
+    .lean();
 
     if (!booking) {
       return res.status(404).json({
         success: false,
         message: "Booking not found",
       });
+    }
+
+    // Check for review for this booking
+    const review = await Review.findOne({
+      booking: bookingId,
+      user: req.user._id
+    }).select('rating status');
+
+    // Add review information to booking
+    if (review) {
+      booking.hasReview = true;
+      booking.userRating = review.rating;
+      booking.reviewStatus = review.status;
+      booking.reviewSubmitted = true;
+    } else {
+      booking.hasReview = false;
+      booking.userRating = null;
+      booking.reviewStatus = null;
+      booking.reviewSubmitted = false;
     }
 
     res.status(200).json({
@@ -919,25 +1001,115 @@ exports.updateBooking = async (req, res) => {
   }
 };
 
-// Cancel booking
-exports.cancelBooking = async (req, res) => {
+// Simple cancel booking function to bypass any validation issues
+exports.simpleCancelBooking = async (req, res) => {
   try {
-    console.log("Cancel Booking - Request Params:", req.params);
-    // console.log("Cancel Booking - Request Body:", req.body);
-
-    const { bookingId } = req.params;
-    const { cancellationReason, userId } = req.body;
-
-    // Validate if userId and bookingId are provided
+    console.log("🔧 SIMPLE CANCEL BOOKING:");
+    console.log("   Booking ID:", req.params.bookingId);
+    console.log("   User:", req.user);
+    
+    const bookingId = req.params.bookingId;
+    const userId = req.user._id;
+    
     if (!bookingId || !userId) {
       return res.status(400).json({
         success: false,
-        message: "Booking ID and User ID are required",
+        message: `Missing required fields: bookingId=${!!bookingId}, userId=${!!userId}`
+      });
+    }
+    
+    // Find booking
+    const booking = await Booking.findOne({ 
+      _id: bookingId, 
+      user: userId 
+    });
+    
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found or does not belong to user"
+      });
+    }
+    
+    // Check 2-hour policy
+    const bookingTime = new Date(booking.createdAt);
+    const currentTime = new Date();
+    const timeDifference = currentTime - bookingTime;
+    const twoHoursInMs = 2 * 60 * 60 * 1000;
+    
+    if (timeDifference > twoHoursInMs) {
+      return res.status(400).json({
+        success: false,
+        message: "Cancellation is only allowed within 2 hours of booking creation"
+      });
+    }
+    
+    // Cancel booking
+    booking.status = "cancelled";
+    booking.cancellationReason = "Customer requested cancellation within 2 hours";
+    booking.cancellationTime = new Date();
+    await booking.save();
+    
+    res.json({
+      success: true,
+      message: "Booking cancelled successfully"
+    });
+    
+  } catch (error) {
+    console.error("Simple cancel error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Cancel booking
+exports.cancelBooking = async (req, res) => {
+  try {
+    console.log("📋 ============================================");
+    console.log("📋 CANCEL BOOKING REQUEST");
+    console.log("📋 ============================================");
+    console.log("   Booking ID:", req.params.bookingId);
+    console.log("   User ID:", req.user?._id);
+    console.log("   User Object:", req.user ? 'Present' : 'Missing');
+    console.log("   Request Body:", req.body);
+    console.log("   Request Params:", req.params);
+
+    const { bookingId } = req.params;
+    const { cancellationReason } = req.body;
+
+    // Validate required parameters
+    if (!bookingId) {
+      console.log("❌ Missing booking ID");
+      return res.status(400).json({
+        success: false,
+        message: "Booking ID is required",
       });
     }
 
+    if (!req.user || !req.user._id) {
+      console.log("❌ Missing user information");
+      return res.status(401).json({
+        success: false,
+        message: "User authentication required",
+      });
+    }
+
+    // Validate MongoDB ObjectId format
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+      console.log("❌ Invalid booking ID format");
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking ID format",
+      });
+    }
+
+    console.log("✅ All validations passed, searching for booking...");
+
     // Find the booking by ID and user
-    const booking = await Booking.findOne({ _id: bookingId, user: userId })
+    const booking = await Booking.findOne({ _id: bookingId, user: req.user._id })
       .populate("subService")
       .populate("user");
 
@@ -947,6 +1119,9 @@ exports.cancelBooking = async (req, res) => {
         message: "Booking not found or does not belong to the user",
       });
     }
+
+    console.log("   Booking Status:", booking.status);
+    console.log("   Booking Created:", booking.createdAt);
 
     if (booking.status === "cancelled") {
       return res.status(400).json({
@@ -962,11 +1137,44 @@ exports.cancelBooking = async (req, res) => {
       });
     }
 
+    // Check 2-hour cancellation policy
+    const bookingTime = new Date(booking.createdAt);
+    const currentTime = new Date();
+    const timeDifference = currentTime - bookingTime;
+    const twoHoursInMs = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+    
+    console.log("   Time Difference (hours):", timeDifference / (60 * 60 * 1000));
+    console.log("   Within 2-hour window:", timeDifference <= twoHoursInMs);
+
+    // Only allow cancellation within 2 hours for pending/confirmed bookings
+    if (!['pending', 'confirmed'].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Booking cannot be cancelled in its current status",
+      });
+    }
+
+    if (timeDifference > twoHoursInMs) {
+      return res.status(400).json({
+        success: false,
+        message: "Cancellation is only allowed within 2 hours of booking creation",
+        policy: {
+          bookingTime: bookingTime.toISOString(),
+          currentTime: currentTime.toISOString(),
+          timePassed: Math.floor(timeDifference / (60 * 60 * 1000)) + " hours " + 
+                     Math.floor((timeDifference % (60 * 60 * 1000)) / (60 * 1000)) + " minutes"
+        }
+      });
+    }
+
     // Update booking status
     booking.status = "cancelled";
-    booking.cancellationReason = cancellationReason || "No reason provided";
+    booking.cancellationReason = cancellationReason || "Customer requested cancellation within 2 hours";
     booking.cancellationTime = new Date();
     await booking.save();
+
+    console.log("✅ Booking cancelled successfully");
+    console.log("📋 ============================================");
 
     // Get admin details for notifications
     const admins = await Admin.find({});
@@ -988,9 +1196,13 @@ exports.cancelBooking = async (req, res) => {
       success: true,
       message: "Booking cancelled successfully",
       booking,
+      cancellationPolicy: {
+        appliedWithin2Hours: true,
+        noCancellationCharges: true
+      }
     });
   } catch (error) {
-    console.error("Error in cancelBooking:", error);
+    console.error("❌ Error in cancelBooking:", error);
     res.status(500).json({
       success: false,
       message: "Error cancelling booking",
@@ -1040,24 +1252,95 @@ exports.addReview = async (req, res) => {
 // Get all bookings for a user
 exports.getAllUserBookings = async (req, res) => {
   try {
-    // console.log("Request Parameters:", req.params);
-    // console.log("User ID:", req.user._id);
-    const bookings = await Booking.find({ user: req.user._id })
+    console.log("📋 ============================================");
+    console.log("📋 FETCHING USER BOOKINGS (getAllUserBookings)");
+    console.log("📋 ============================================");
+    console.log("   User ID:", req.user._id);
+    console.log("   User Email:", req.user.email);
+    
+    // First, let's check how many bookings exist for this user (including temporary ones)
+    const totalBookings = await Booking.countDocuments({ user: req.user._id });
+    const confirmedBookings = await Booking.countDocuments({ 
+      user: req.user._id, 
+      status: { $ne: 'temp' } // Exclude temporary bookings
+    });
+    
+    console.log("   Total Bookings (including temp):", totalBookings);
+    console.log("   Confirmed Bookings:", confirmedBookings);
+    
+    // Fetch bookings excluding temporary ones
+    const bookings = await Booking.find({ 
+      user: req.user._id,
+      status: { $ne: 'temp' } // Exclude temporary bookings that haven't been confirmed
+    })
       .populate({
         path: "subService",
         populate: {
-          path: "category",
-          select: "name",
+          path: "service",
+          populate: {
+            path: "subCategory",
+            populate: {
+              path: "category",
+              select: "name",
+            },
+          },
         },
       })
-      .sort({ createdAt: -1 });
+      .populate('partner', 'profile.name profile.phone phone')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Check for reviews for each booking
+    const bookingIds = bookings.map(b => b._id);
+    const reviews = await Review.find({
+      booking: { $in: bookingIds },
+      user: req.user._id
+    }).select('booking rating status');
+
+    // Create a map of booking reviews
+    const reviewMap = {};
+    reviews.forEach(review => {
+      reviewMap[review.booking.toString()] = {
+        hasReview: true,
+        userRating: review.rating,
+        reviewStatus: review.status
+      };
+    });
+
+    // Add review information to bookings
+    const bookingsWithReviews = bookings.map(booking => ({
+      ...booking,
+      hasReview: reviewMap[booking._id.toString()]?.hasReview || false,
+      userRating: reviewMap[booking._id.toString()]?.userRating || null,
+      reviewStatus: reviewMap[booking._id.toString()]?.reviewStatus || null,
+      reviewSubmitted: reviewMap[booking._id.toString()]?.hasReview || false
+    }));
+
+    console.log("   Fetched Bookings Count:", bookingsWithReviews.length);
+    
+    // Log each booking for debugging
+    bookingsWithReviews.forEach((booking, index) => {
+      console.log(`   Booking ${index + 1}:`, {
+        id: booking._id,
+        serviceName: booking.serviceName,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        amount: booking.totalAmount || booking.amount,
+        createdAt: booking.createdAt,
+        hasCartItems: !!(booking.cartItems && booking.cartItems.length > 0),
+        hasReview: booking.hasReview,
+        userRating: booking.userRating
+      });
+    });
+    
+    console.log("📋 ============================================");
 
     res.status(200).json({
       success: true,
-      data: bookings,
+      data: bookingsWithReviews,
     });
   } catch (error) {
-    console.error("Error fetching all user bookings:", error);
+    console.error("❌ Error fetching all user bookings:", error);
     res.status(500).json({
       success: false,
       message: "Error fetching bookings",
@@ -1172,5 +1455,118 @@ exports.getAllReviews = async (req, res) => {
     res.status(200).json(ApprovedReviews);
   } catch (error) {
     res.status(500).json({ message: "Error fetching reviews", error });
+  }
+};
+
+// Submit booking review
+exports.submitBookingReview = async (req, res) => {
+  try {
+    console.log("📝 ============================================");
+    console.log("📝 SUBMIT BOOKING REVIEW");
+    console.log("📝 ============================================");
+    console.log("   Booking ID:", req.params.bookingId);
+    console.log("   User ID:", req.user._id);
+    console.log("   Review Data:", req.body);
+
+    const { bookingId } = req.params;
+    const { rating, comment, type = 'booking' } = req.body;
+
+    // Validate input
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Rating is required and must be between 1 and 5",
+      });
+    }
+
+    if (!comment || comment.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Comment is required and must be at least 10 characters long",
+      });
+    }
+
+    if (comment.trim().length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: "Comment must not exceed 500 characters",
+      });
+    }
+
+    // Find the booking
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      user: req.user._id,
+    }).populate('subService').populate('partner');
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found or does not belong to the user",
+      });
+    }
+
+    // Check if booking is completed
+    if (booking.status !== 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: "Reviews can only be submitted for completed bookings",
+      });
+    }
+
+    // Check if review already exists
+    const existingReview = await Review.findOne({
+      booking: bookingId,
+      user: req.user._id,
+    });
+
+    if (existingReview) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already submitted a review for this booking",
+      });
+    }
+
+    // Create new review
+    const review = new Review({
+      user: req.user._id,
+      booking: bookingId,
+      subService: booking.subService?._id,
+      partner: booking.partner?._id,
+      rating: parseInt(rating),
+      comment: comment.trim(),
+      status: 'pending' // Reviews need admin approval
+    });
+
+    await review.save();
+
+    // Update booking to mark as reviewed
+    booking.hasReview = true;
+    booking.userRating = parseInt(rating);
+    booking.reviewSubmitted = true;
+    await booking.save();
+
+    console.log("✅ Review submitted successfully");
+    console.log("📝 ============================================");
+
+    res.status(201).json({
+      success: true,
+      message: "Review submitted successfully! It will be published after moderation.",
+      data: {
+        reviewId: review._id,
+        rating: review.rating,
+        comment: review.comment,
+        status: review.status,
+        submittedAt: review.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error submitting review:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error submitting review",
+      error: error.message,
+    });
   }
 };
