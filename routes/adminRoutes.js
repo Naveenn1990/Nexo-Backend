@@ -23,6 +23,7 @@ const featuredReviewController = require('../controllers/featuredReviewControlle
 const materialCategoryController = require('../controllers/materialCategoryController');
 const inventoryController = require('../controllers/inventoryController');
 const amcPlanController = require('../controllers/amcPlanController');
+const amcContractController = require('../controllers/amcContractController');
 const adminVendorController = require('../controllers/adminVendorController');
 
 // Auth routes
@@ -479,6 +480,15 @@ router.post('/amc-plans/generate-from-services', adminAuth, amcPlanController.ge
 router.post('/amc-plans/create-samples', adminAuth, amcPlanController.createSamplePlans);
 router.get('/amc-subscribers', adminAuth, amcPlanController.getAMCSubscribers);
 router.post('/amc-subscribers/assign-partner', adminAuth, amcPlanController.assignAMCSubscriptionToPartner);
+
+// AMC Contracts Management (Admin)
+router.get('/amc-contracts', adminAuth, amcContractController.getAMCContracts);
+router.get('/amc-contracts/stats', adminAuth, amcContractController.getContractStats);
+router.get('/amc-contracts/:contractId', adminAuth, amcContractController.getAMCContract);
+router.post('/amc-contracts', adminAuth, amcContractController.createAMCContract);
+router.put('/amc-contracts/:contractId', adminAuth, amcContractController.updateAMCContract);
+router.put('/amc-contracts/:contractId/activate', adminAuth, amcContractController.activateContract);
+router.delete('/amc-contracts/:contractId', adminAuth, amcContractController.deleteAMCContract);
 
 // Fix user data issues
 router.post('/fix-user-data', adminAuth, async (req, res) => {
