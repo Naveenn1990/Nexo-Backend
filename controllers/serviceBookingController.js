@@ -229,8 +229,8 @@ exports.createServiceBooking = async (req, res) => {
       firstname: customerDetails.name,
       email: customerDetails.email || user.email || 'customer@nexo.com',
       phone: customerDetails.phone,
-      surl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/user/service-booking/payment/success`,
-      furl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/user/service-booking/payment/failure`,
+      surl: `${process.env.BASE_URL || 'https://nexo.works'}/api/user/service-booking/payment/success`,
+      furl: `${process.env.BASE_URL || 'https://nexo.works'}/api/user/service-booking/payment/failure`,
       udf1: txnid, // Transaction ID (to retrieve temp booking)
       udf2: userId.toString(),
       udf3: serviceName || '',
@@ -321,10 +321,10 @@ exports.testPaymentSuccess = async (req, res) => {
     console.log('   Request Body:', JSON.stringify(req.body, null, 2));
     console.log('   Request Query:', JSON.stringify(req.query, null, 2));
     
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/success?test=true`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/success?test=true`);
   } catch (error) {
     console.error('Test payment error:', error);
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/failure?reason=test_error`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/failure?reason=test_error`);
   }
 };
 
@@ -390,7 +390,7 @@ exports.handlePaymentSuccess = async (req, res) => {
         // For now, let's allow the payment to proceed but log the issue
         console.log('⚠️  PROCEEDING WITH PAYMENT DESPITE HASH MISMATCH (for debugging)');
         // Uncomment the line below to enforce hash verification:
-        // return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/failure?reason=invalid_hash`);
+        // return res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/failure?reason=invalid_hash`);
       } else {
         console.log('✅ Hash verification passed');
       }
@@ -610,7 +610,7 @@ exports.handlePaymentSuccess = async (req, res) => {
         }
         
         // Redirect to success page
-        res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/success?bookingId=${finalBooking._id}`);
+        res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/success?bookingId=${finalBooking._id}`);
         
       } catch (bookingError) {
         console.error('❌ Failed to confirm booking:', bookingError);
@@ -621,18 +621,18 @@ exports.handlePaymentSuccess = async (req, res) => {
         
         // Even if booking confirmation fails, the payment was successful
         // So we should still redirect to success but with a warning
-        res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/success?warning=booking_confirmation_failed&txnid=${txnid}`);
+        res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/success?warning=booking_confirmation_failed&txnid=${txnid}`);
       }
     } else if (status === 'failure') {
       // Payment failed - DO NOT create booking
       console.log('❌ Payment failed - booking NOT created');
       console.log('   Failure Reason: Payment gateway reported failure');
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/failure?reason=payment_failed&status=${status}&txnid=${txnid}`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/failure?reason=payment_failed&status=${status}&txnid=${txnid}`);
       
     } else if (status === 'pending') {
       // Payment pending - Keep temporary booking but don't confirm
       console.log('⏳ Payment pending - keeping temporary booking');
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/pending?txnid=${txnid}&status=${status}`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/pending?txnid=${txnid}&status=${status}`);
       
     } else if (status === 'cancel') {
       // Payment cancelled by user - Clean up temporary booking
@@ -655,12 +655,12 @@ exports.handlePaymentSuccess = async (req, res) => {
         console.error('⚠️  Failed to cleanup temporary booking:', cleanupError);
       }
       
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/cancelled?txnid=${txnid}`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/cancelled?txnid=${txnid}`);
       
     } else {
       // Unknown status - treat as failure
       console.log('❓ Unknown payment status:', status);
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/failure?reason=unknown_status&status=${status}&txnid=${txnid}`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/failure?reason=unknown_status&status=${status}&txnid=${txnid}`);
     }
 
   } catch (error) {
@@ -670,7 +670,7 @@ exports.handlePaymentSuccess = async (req, res) => {
     console.error('   Error:', error.message);
     console.error('   Stack:', error.stack);
     console.error('❌ ============================================');
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/failure?reason=server_error&error=${encodeURIComponent(error.message)}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/failure?reason=server_error&error=${encodeURIComponent(error.message)}`);
   }
 };
 
@@ -742,11 +742,11 @@ exports.handlePaymentFailure = async (req, res) => {
       }
     }
 
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/failure?reason=${failureReason}&txnid=${txnid}&message=${encodeURIComponent(userMessage)}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/failure?reason=${failureReason}&txnid=${txnid}&message=${encodeURIComponent(userMessage)}`);
 
   } catch (error) {
     console.error('❌ Payment failure callback error:', error);
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/payment/failure?reason=server_error&message=${encodeURIComponent('Server error occurred')}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment/failure?reason=server_error&message=${encodeURIComponent('Server error occurred')}`);
   }
 };
 

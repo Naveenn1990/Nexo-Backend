@@ -66,8 +66,8 @@ exports.initiateWalletPayment = async (req, res) => {
       firstname: user.name || 'User',
       email: user.email || `user${userId}@nexo.works`,
       phone: user.phone || '',
-      surl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/user/wallet/payment-success`,
-      furl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/user/wallet/payment-failure`,
+      surl: `${process.env.BASE_URL || 'https://nexo.works'}/api/user/wallet/payment-success`,
+      furl: `${process.env.BASE_URL || 'https://nexo.works'}/api/user/wallet/payment-failure`,
     };
 
     // Generate hash (salt is used for generation but NOT sent to PayU)
@@ -129,7 +129,7 @@ exports.walletPaymentSuccess = async (req, res) => {
 
       if (!isValid) {
         console.error('❌ Invalid payment hash');
-        return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/user/dashboard/wallet?payment=failed&reason=invalid_hash`);
+        return res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/user/dashboard/wallet?payment=failed&reason=invalid_hash`);
       }
       
       console.log('✅ Hash verification passed');
@@ -160,7 +160,7 @@ exports.walletPaymentSuccess = async (req, res) => {
     if (!user) {
       console.error('❌ User not found with email:', email, 'or phone:', phone);
       console.error('❌ Available user search methods exhausted');
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/user/dashboard/wallet?payment=failed&reason=user_not_found&email=${email}&phone=${phone}`);
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/user/dashboard/wallet?payment=failed&reason=user_not_found&email=${email}&phone=${phone}`);
     }
 
     console.log('✅ User found:', user._id, '-', user.name);
@@ -190,7 +190,7 @@ exports.walletPaymentSuccess = async (req, res) => {
 
       if (existingTxn) {
         console.log('⚠️  Transaction already processed:', mihpayid || txnid);
-        return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/user/dashboard/wallet?payment=success&amount=${amount}&txnid=${txnid}&duplicate=true`);
+        return res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/user/dashboard/wallet?payment=success&amount=${amount}&txnid=${txnid}&duplicate=true`);
       }
 
       // Add transaction
@@ -244,10 +244,10 @@ exports.walletPaymentSuccess = async (req, res) => {
       console.log('   Transaction ID:', mihpayid || txnid);
       console.log('✅ ============================================');
       
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/user/dashboard/wallet?payment=success&amount=${amount}&txnid=${txnid}`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/user/dashboard/wallet?payment=success&amount=${amount}&txnid=${txnid}`);
     } else {
       console.log('❌ Payment status is not success:', status);
-      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/user/dashboard/wallet?payment=failed&reason=payment_failed&status=${status}`);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/user/dashboard/wallet?payment=failed&reason=payment_failed&status=${status}`);
     }
   } catch (error) {
     console.error('❌ ============================================');
@@ -256,7 +256,7 @@ exports.walletPaymentSuccess = async (req, res) => {
     console.error('   Error:', error.message);
     console.error('   Stack:', error.stack);
     console.error('❌ ============================================');
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:9088'}/user/dashboard/wallet?payment=failed&reason=server_error&error=${encodeURIComponent(error.message)}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/user/dashboard/wallet?payment=failed&reason=server_error&error=${encodeURIComponent(error.message)}`);
   }
 };
 

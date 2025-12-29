@@ -92,11 +92,11 @@ notificationSchema.post('save', async function (doc) {
         return icon;
       }
       // Otherwise, prepend base URL
-      return `http://localhost:9088${icon.startsWith('/') ? icon : '/' + icon}`;
+      return `https://nexo.works${icon.startsWith('/') ? icon : '/' + icon}`;
     };
 
     const iconUrl = getIconUrl(doc.icon);
-    const imageUrl = doc.image ? (doc.image.startsWith('http') ? doc.image : `http://localhost:9088${doc.image.startsWith('/') ? doc.image : '/' + doc.image}`) : null;
+    const imageUrl = doc.image ? (doc.image.startsWith('http') ? doc.image : `https://nexo.works${doc.image.startsWith('/') ? doc.image : '/' + doc.image}`) : null;
 
     const userMessage = {
       notification: {

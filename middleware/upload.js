@@ -88,11 +88,11 @@ const processFilePath = (req, res, next) => {
 const stripUrl = (filename) => {
     if (!filename) return filename;
     // Handle various URL patterns
-    if (filename.includes('http://localhost:9088/uploads/')) {
-        return filename.replace('http://localhost:9088/uploads/', '');
+    if (filename.includes('https://nexo.works/uploads/')) {
+        return filename.replace('https://nexo.works/uploads/', '');
     }
-    if (filename.includes('http://localhost:9088/')) {
-        return filename.replace('http://localhost:9088/', '');
+    if (filename.includes('https://nexo.works/')) {
+        return filename.replace('https://nexo.works/', '');
     }
     if (filename.includes('/')) {
         return filename.split('/').pop();

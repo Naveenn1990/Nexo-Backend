@@ -149,7 +149,7 @@ const uploadFile2 = (file, bucketname) => {
         reject("File not uploaded");
       } else {
         // Return proper URL for local file access
-        let location = `http://localhost:9088/uploads/${subdir}/${filename}`;
+        let location = `https://nexo.works/uploads/${subdir}/${filename}`;
         console.log(location);
         resolve(location);
       }
@@ -246,7 +246,7 @@ const handleFileUpload = async (file, bucketname) => {
       subdir = 'profiles';
     }
     
-    return `http://localhost:9088/uploads/${subdir}/${filename}`;
+    return `https://nexo.works/uploads/${subdir}/${filename}`;
   }
   
   return null;

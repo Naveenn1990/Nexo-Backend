@@ -17,7 +17,7 @@ try {
 }
 
 // Helper to get icon URL
-const getIconUrl = (icon, baseUrl = 'http://localhost:9088') => {
+const getIconUrl = (icon, baseUrl = 'https://nexo.works') => {
   if (!icon) return null;
   if (icon.startsWith('http://') || icon.startsWith('https://')) {
     return icon;
