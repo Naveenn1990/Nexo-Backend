@@ -407,5 +407,17 @@ router.post("/bookings/:bookingId/quotation", auth, quotationController.createQu
 router.get("/bookings/:bookingId/quotations", auth, quotationController.getQuotationsByBooking);
 router.get("/quotations", auth, quotationController.getPartnerQuotations);
 router.get("/quotations/:quotationId", auth, quotationController.getQuotationById);
+router.delete("/quotations/:quotationId", auth, quotationController.deleteQuotation);
+router.post("/quotations/:quotationId/approve", auth, quotationController.partnerAcceptQuotation);
+router.post("/quotations/:quotationId/reject", auth, quotationController.partnerRejectQuotation);
+
+// Job Items Routes
+const jobItemsController = require("../controllers/jobItemsController");
+router.get("/jobs/:jobId/items", auth, jobItemsController.getJobItems);
+router.post("/jobs/items", auth, jobItemsController.addJobItem);
+router.put("/jobs/items/:jobItemId", auth, jobItemsController.updateJobItem);
+router.delete("/jobs/items/:jobItemId", auth, jobItemsController.deleteJobItem);
+router.get("/jobs/:jobId/items/summary", auth, jobItemsController.getJobItemsSummary);
+router.get("/job-items", auth, jobItemsController.getAllPartnerJobItems);
 
 module.exports = router;

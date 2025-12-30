@@ -5,7 +5,7 @@ async function testAMCContractAPI() {
     console.log('🧪 Testing AMC Contract API...');
 
     // First, let's test if the server is running
-    const baseURL = 'https://nexo.works';
+    const baseURL = 'http://localhost:9088';
     
     try {
       const healthCheck = await axios.get(`${baseURL}/api/health`);

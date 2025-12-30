@@ -528,6 +528,7 @@ router.get('/inventory/items/:id', adminAuth, inventoryController.getInventoryIt
 router.get('/inventory/items/:id/history', adminAuth, inventoryController.getInventoryItemHistory);
 router.post('/inventory/items', adminAuth, inventoryController.createInventoryItem);
 router.put('/inventory/items/:id', adminAuth, inventoryController.updateInventoryItem);
+router.put('/inventory/items/:id/stock', adminAuth, inventoryController.updateInventoryStock);
 router.delete('/inventory/items/:id', adminAuth, inventoryController.deleteInventoryItem);
 
 // Purchase Orders
@@ -548,6 +549,7 @@ router.delete('/inventory/thresholds/:category', adminAuth, inventoryController.
 const quotationController = require("../controllers/quotationController");
 router.get("/quotations", adminAuth, quotationController.getAllQuotations);
 router.get("/quotations/:quotationId", adminAuth, quotationController.getQuotationById);
+router.get("/bookings/:bookingId/quotations", adminAuth, quotationController.getQuotationsByBooking);
 router.put("/quotations/:quotationId/approve", adminAuth, quotationController.adminAcceptQuotation);
 router.put("/quotations/:quotationId/reject", adminAuth, quotationController.adminRejectQuotation);
 

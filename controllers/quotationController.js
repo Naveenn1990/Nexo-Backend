@@ -1,48 +1,112 @@
+const mongoose = require('mongoose');
 const Quotation = require('../models/Quotation');
 const Booking = require('../models/booking');
 const User = require('../models/User');
 const Partner = require('../models/PartnerModel');
 const Admin = require('../models/admin');
 const Notification = require('../models/Notification');
+const Counter = require('../models/Counter');
 const { sendPartnerNotification, sendAdminNotification, sendAllAdminsNotification } = require('../services/notificationService');
 const { sendMaterialQuotationNotifications } = require('../services/materialNotificationService');
 const firebaseAdmin = require('../config/firebase');
 
+// Initialize counter if it doesn't exist
+const initializeQuotationCounter = async () => {
+  try {
+    await Counter.findOneAndUpdate(
+      { _id: 'quotation' },
+      { $setOnInsert: { sequence: 0 } },
+      { upsert: true, new: true }
+    );
+    console.log('[Counter] Quotation counter initialized');
+  } catch (error) {
+    console.error('[Counter] Error initializing quotation counter:', error);
+  }
+};
+
+// Initialize counter on module load
+initializeQuotationCounter();
+
 // Create quotation (Partner)
 exports.createQuotation = async (req, res) => {
   try {
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] CREATE QUOTATION REQUEST');
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] Booking ID:', req.params.bookingId);
+    console.log('[Quotation] Partner ID:', req.partner?._id);
+    console.log('[Quotation] Partner object:', req.partner ? 'exists' : 'missing');
+    console.log('[Quotation] Request body:', JSON.stringify(req.body, null, 2));
+    console.log('[Quotation] ========================================');
+
+    // Check if partner is authenticated
+    if (!req.partner || !req.partner._id) {
+      console.log('[Quotation] ❌ Partner not authenticated');
+      return res.status(401).json({
+        success: false,
+        message: 'Partner authentication required'
+      });
+    }
+
     const { bookingId } = req.params;
     const { items, subtotal, tax, discount, totalAmount, description, validTill, notes } = req.body;
 
     // Validate required fields
     if (!items || !Array.isArray(items) || items.length === 0) {
+      console.log('[Quotation] ❌ Validation failed: No items provided');
       return res.status(400).json({
         success: false,
         message: 'At least one item is required'
       });
     }
 
-    if (!totalAmount || totalAmount <= 0) {
+    // Validate totalAmount
+    const numericTotalAmount = Number(totalAmount);
+    if (!numericTotalAmount || isNaN(numericTotalAmount) || numericTotalAmount <= 0) {
+      console.log('[Quotation] ❌ Validation failed: Invalid total amount:', totalAmount, 'converted to:', numericTotalAmount);
       return res.status(400).json({
         success: false,
-        message: 'Total amount must be greater than 0'
+        message: 'Total amount must be a valid number greater than 0'
       });
     }
 
-    // Find booking
+    // Validate booking ID format
+    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+      console.log('[Quotation] ❌ Validation failed: Invalid booking ID format:', bookingId);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid booking ID format'
+      });
+    }
+
+    // Find booking and populate partner details
+    console.log('[Quotation] Finding booking...');
     const booking = await Booking.findById(bookingId)
       .populate('user')
-      .populate('partner');
+      .populate({
+        path: 'partner',
+        select: 'profile phone partnerType'
+      });
 
     if (!booking) {
+      console.log('[Quotation] ❌ Booking not found:', bookingId);
       return res.status(404).json({
         success: false,
         message: 'Booking not found'
       });
     }
 
+    console.log('[Quotation] ✅ Booking found:', booking._id);
+    console.log('[Quotation] Booking status:', booking.status);
+    console.log('[Quotation] Booking partner:', booking.partner?._id);
+    console.log('[Quotation] Partner type:', booking.partner?.partnerType);
+    console.log('[Quotation] Request partner:', req.partner._id);
+
     // Verify partner owns this booking
-    if (booking.partner._id.toString() !== req.partner._id.toString()) {
+    if (!booking.partner || booking.partner._id.toString() !== req.partner._id.toString()) {
+      console.log('[Quotation] ❌ Authorization failed: Partner mismatch');
+      console.log('[Quotation] Booking partner ID:', booking.partner?._id);
+      console.log('[Quotation] Request partner ID:', req.partner._id);
       return res.status(403).json({
         success: false,
         message: 'You are not authorized to create quotation for this booking'
@@ -50,46 +114,232 @@ exports.createQuotation = async (req, res) => {
     }
 
     // Check if booking is in valid status
+    console.log('[Quotation] Checking booking status:', booking.status);
+    console.log('[Quotation] Valid statuses:', ['accepted', 'in_progress']);
+    
     if (!['accepted', 'in_progress'].includes(booking.status)) {
+      console.log('[Quotation] ❌ Invalid booking status:', booking.status);
       return res.status(400).json({
         success: false,
-        message: 'Quotation can only be created for accepted or in-progress bookings'
+        message: `Quotation can only be created for accepted or in-progress bookings. Current status: ${booking.status}`
       });
     }
 
+    console.log('[Quotation] ✅ Booking status is valid');
+
     // Validate validTill date
+    console.log('[Quotation] Validating validTill date:', validTill);
+    console.log('[Quotation] validTill type:', typeof validTill);
+    
+    if (!validTill) {
+      console.log('[Quotation] ❌ validTill is missing');
+      return res.status(400).json({
+        success: false,
+        message: 'Valid till date is required'
+      });
+    }
+    
     const validTillDate = new Date(validTill);
-    if (isNaN(validTillDate.getTime()) || validTillDate <= new Date()) {
+    const now = new Date();
+    
+    console.log('[Quotation] Parsed validTill date:', validTillDate);
+    console.log('[Quotation] Current date:', now);
+    console.log('[Quotation] Is valid date:', !isNaN(validTillDate.getTime()));
+    console.log('[Quotation] Is future date:', validTillDate > now);
+    
+    if (isNaN(validTillDate.getTime())) {
+      console.log('[Quotation] ❌ Invalid date format:', validTill);
+      return res.status(400).json({
+        success: false,
+        message: 'Valid till date must be a valid date'
+      });
+    }
+    
+    if (validTillDate <= now) {
+      console.log('[Quotation] ❌ Date is not in future:', validTill);
       return res.status(400).json({
         success: false,
         message: 'Valid till date must be in the future'
       });
     }
 
+    console.log('[Quotation] ✅ ValidTill date is valid');
+
     // Calculate totals from items
     const calculatedSubtotal = items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
     const calculatedTotal = calculatedSubtotal + (tax || 0) - (discount || 0);
 
+    console.log('[Quotation] Creating quotation object...');
+    console.log('[Quotation] Items count:', items.length);
+    console.log('[Quotation] Items data:', JSON.stringify(items, null, 2));
+    console.log('[Quotation] Calculated subtotal:', calculatedSubtotal);
+    console.log('[Quotation] Total amount:', totalAmount);
+
+    // Validate items before creating quotation
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      console.log(`[Quotation] Validating item ${i + 1}:`, JSON.stringify(item, null, 2));
+      
+      if (!item.name || typeof item.name !== 'string' || !item.name.trim()) {
+        console.log(`[Quotation] ❌ Item ${i + 1} has invalid name:`, item.name);
+        return res.status(400).json({
+          success: false,
+          message: `Item ${i + 1} must have a valid name`
+        });
+      }
+      
+      const quantity = Number(item.quantity);
+      if (!quantity || isNaN(quantity) || quantity <= 0) {
+        console.log(`[Quotation] ❌ Item ${i + 1} has invalid quantity:`, item.quantity, 'converted to:', quantity);
+        return res.status(400).json({
+          success: false,
+          message: `Item ${i + 1} must have a valid quantity greater than 0`
+        });
+      }
+      
+      const unitPrice = Number(item.unitPrice);
+      if (!unitPrice || isNaN(unitPrice) || unitPrice <= 0) {
+        console.log(`[Quotation] ❌ Item ${i + 1} has invalid unit price:`, item.unitPrice, 'converted to:', unitPrice);
+        return res.status(400).json({
+          success: false,
+          message: `Item ${i + 1} must have a valid unit price greater than 0`
+        });
+      }
+      
+      const total = Number(item.total);
+      if (!total || isNaN(total) || total <= 0) {
+        console.log(`[Quotation] ❌ Item ${i + 1} has invalid total:`, item.total, 'converted to:', total);
+        return res.status(400).json({
+          success: false,
+          message: `Item ${i + 1} must have a valid total greater than 0`
+        });
+      }
+
+      // Ensure the item has the correct data types for saving
+      console.log(`[Quotation] Processing item ${i + 1} materialId:`, item.materialId, 'type:', typeof item.materialId);
+      
+      // Handle materialId - only set if it's a valid ObjectId, otherwise null
+      let processedMaterialId = null;
+      if (item.materialId) {
+        if (mongoose.Types.ObjectId.isValid(item.materialId)) {
+          processedMaterialId = item.materialId;
+          console.log(`[Quotation] Item ${i + 1} has valid materialId:`, processedMaterialId);
+        } else {
+          console.log(`[Quotation] Item ${i + 1} has invalid materialId, setting to null:`, item.materialId);
+        }
+      }
+      
+      items[i] = {
+        name: String(item.name).trim(),
+        description: String(item.description || '').trim(),
+        quantity: quantity,
+        unitPrice: unitPrice,
+        total: total,
+        materialId: processedMaterialId,
+        category: String(item.category || '').trim(),
+        isManual: processedMaterialId ? false : true
+      };
+    }
+
+    // Determine initial partner status based on partner type
+    let initialPartnerStatus = 'not_required'; // Default for individual partners
+    if (booking.partner?.partnerType === 'franchise') {
+      initialPartnerStatus = 'pending'; // Franchise partners need to approve first
+    }
+
+    console.log('[Quotation] Partner type:', booking.partner?.partnerType);
+    console.log('[Quotation] Initial partner status:', initialPartnerStatus);
+
     // Create quotation
-    const quotation = new Quotation({
+    const quotationData = {
       booking: bookingId,
       user: booking.user._id,
       partner: req.partner._id,
-      items,
-      subtotal: subtotal || calculatedSubtotal,
-      tax: tax || 0,
-      discount: discount || 0,
-      totalAmount: totalAmount || calculatedTotal,
-      description: description || '',
+      items: items, // Items are already validated and formatted above
+      subtotal: Number(subtotal) || calculatedSubtotal,
+      tax: Number(tax) || 0,
+      discount: Number(discount) || 0,
+      totalAmount: Number(totalAmount) || calculatedTotal,
+      description: String(description || '').trim(),
       validTill: validTillDate,
-      notes: notes || '',
+      notes: String(notes || '').trim(),
       customerStatus: 'pending',
+      partnerStatus: initialPartnerStatus,
       adminStatus: 'pending',
       status: 'pending'
-    });
+    };
 
-    await quotation.save();
-    console.log(`[Quotation] Quotation saved with number: ${quotation.quotationNumber}`);
+    console.log('[Quotation] Creating quotation with data:', JSON.stringify(quotationData, null, 2));
+    
+    // Validate quotation data before creating the model
+    if (!quotationData.booking || !mongoose.Types.ObjectId.isValid(quotationData.booking)) {
+      console.log('[Quotation] ❌ Invalid booking ID for quotation');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid booking ID'
+      });
+    }
+    
+    if (!quotationData.user || !mongoose.Types.ObjectId.isValid(quotationData.user)) {
+      console.log('[Quotation] ❌ Invalid user ID for quotation');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID'
+      });
+    }
+    
+    if (!quotationData.partner || !mongoose.Types.ObjectId.isValid(quotationData.partner)) {
+      console.log('[Quotation] ❌ Invalid partner ID for quotation');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid partner ID'
+      });
+    }
+    
+    const quotation = new Quotation(quotationData);
+
+    console.log('[Quotation] Saving quotation...');
+    try {
+      await quotation.save();
+      console.log(`[Quotation] ✅ Quotation saved with number: ${quotation.quotationNumber}`);
+    } catch (saveError) {
+      console.error('[Quotation] ❌ Error saving quotation:', saveError);
+      console.error('[Quotation] Save error name:', saveError.name);
+      console.error('[Quotation] Save error message:', saveError.message);
+      
+      if (saveError.errors) {
+        console.error('[Quotation] Validation errors:');
+        Object.keys(saveError.errors).forEach(key => {
+          console.error(`  - ${key}: ${saveError.errors[key].message}`);
+        });
+      }
+      
+      if (saveError.stack) {
+        console.error('[Quotation] Save error stack:', saveError.stack);
+      }
+      
+      // Check if it's a validation error
+      if (saveError.name === 'ValidationError') {
+        const validationErrors = Object.values(saveError.errors).map(err => err.message);
+        console.error('[Quotation] Validation errors:', validationErrors);
+        return res.status(400).json({
+          success: false,
+          message: 'Validation error: ' + validationErrors.join(', '),
+          errors: validationErrors,
+          details: saveError.errors
+        });
+      }
+      
+      // Check if it's a duplicate key error
+      if (saveError.code === 11000) {
+        return res.status(400).json({
+          success: false,
+          message: 'Duplicate quotation number. Please try again.'
+        });
+      }
+      
+      throw saveError; // Re-throw if it's not a handled error
+    }
 
     // Populate quotation for response
     const populatedQuotation = await Quotation.findById(quotation._id)
@@ -172,11 +422,18 @@ exports.createQuotation = async (req, res) => {
       data: populatedQuotation
     });
   } catch (error) {
-    console.error('Error creating quotation:', error);
+    console.error('[Quotation] ❌❌❌ CRITICAL ERROR creating quotation:', error);
+    console.error('[Quotation] Error message:', error.message);
+    console.error('[Quotation] Error stack:', error.stack);
+    console.error('[Quotation] Request params:', req.params);
+    console.error('[Quotation] Request body:', JSON.stringify(req.body, null, 2));
+    console.error('[Quotation] Partner ID:', req.partner?._id);
+    
     res.status(500).json({
       success: false,
       message: 'Error creating quotation',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
@@ -413,15 +670,214 @@ exports.customerRejectQuotation = async (req, res) => {
   }
 };
 
-// Admin accept quotation
+// Partner accept quotation (for franchise partners)
+exports.partnerAcceptQuotation = async (req, res) => {
+  try {
+    const { quotationId } = req.params;
+
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] PARTNER ACCEPT QUOTATION REQUEST');
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] Quotation ID:', quotationId);
+    console.log('[Quotation] Partner ID:', req.partner?._id);
+    console.log('[Quotation] ========================================');
+
+    // Check if partner is authenticated
+    if (!req.partner || !req.partner._id) {
+      console.log('[Quotation] ❌ Partner not authenticated');
+      return res.status(401).json({
+        success: false,
+        message: 'Partner authentication required'
+      });
+    }
+
+    // Validate quotation ID format
+    if (!mongoose.Types.ObjectId.isValid(quotationId)) {
+      console.log('[Quotation] ❌ Invalid quotation ID format:', quotationId);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quotation ID format'
+      });
+    }
+
+    // Find quotation
+    const quotation = await Quotation.findById(quotationId)
+      .populate('booking')
+      .populate('user', 'name email phone')
+      .populate('partner', 'profile.name phone partnerType');
+
+    if (!quotation) {
+      console.log('[Quotation] ❌ Quotation not found:', quotationId);
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation not found'
+      });
+    }
+
+    console.log('[Quotation] ✅ Quotation found:', quotation._id);
+    console.log('[Quotation] Partner status:', quotation.partnerStatus);
+    console.log('[Quotation] Partner type:', quotation.partner?.partnerType);
+
+    // Verify partner owns this quotation
+    if (!quotation.partner || quotation.partner._id.toString() !== req.partner._id.toString()) {
+      console.log('[Quotation] ❌ Authorization failed: Partner mismatch');
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to approve this quotation'
+      });
+    }
+
+    // Check if partner approval is required
+    if (quotation.partnerStatus !== 'pending') {
+      console.log('[Quotation] ❌ Partner has already responded');
+      return res.status(400).json({
+        success: false,
+        message: 'You have already responded to this quotation'
+      });
+    }
+
+    // Check if expired
+    if (new Date(quotation.validTill) < new Date()) {
+      quotation.status = 'expired';
+      await quotation.save();
+      return res.status(400).json({
+        success: false,
+        message: 'This quotation has expired'
+      });
+    }
+
+    // Update partner status
+    quotation.partnerStatus = 'accepted';
+    quotation.partnerResponseAt = new Date();
+    await quotation.save();
+
+    // Populate for response
+    const updatedQuotation = await Quotation.findById(quotation._id)
+      .populate('booking')
+      .populate('user', 'name email phone')
+      .populate('partner', 'profile.name phone partnerType')
+      .populate('adminReviewedBy', 'name email');
+
+    console.log('[Quotation] ✅ Partner approved quotation successfully');
+
+    res.status(200).json({
+      success: true,
+      message: 'Quotation approved successfully. Waiting for admin approval.',
+      data: updatedQuotation
+    });
+  } catch (error) {
+    console.error('[Quotation] ❌ Error approving quotation:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error approving quotation',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+// Partner reject quotation (for franchise partners)
+exports.partnerRejectQuotation = async (req, res) => {
+  try {
+    const { quotationId } = req.params;
+    const { rejectionReason } = req.body;
+
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] PARTNER REJECT QUOTATION REQUEST');
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] Quotation ID:', quotationId);
+    console.log('[Quotation] Partner ID:', req.partner?._id);
+    console.log('[Quotation] ========================================');
+
+    // Check if partner is authenticated
+    if (!req.partner || !req.partner._id) {
+      console.log('[Quotation] ❌ Partner not authenticated');
+      return res.status(401).json({
+        success: false,
+        message: 'Partner authentication required'
+      });
+    }
+
+    // Validate quotation ID format
+    if (!mongoose.Types.ObjectId.isValid(quotationId)) {
+      console.log('[Quotation] ❌ Invalid quotation ID format:', quotationId);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quotation ID format'
+      });
+    }
+
+    // Find quotation
+    const quotation = await Quotation.findById(quotationId)
+      .populate('booking')
+      .populate('user', 'name email phone')
+      .populate('partner', 'profile.name phone partnerType');
+
+    if (!quotation) {
+      console.log('[Quotation] ❌ Quotation not found:', quotationId);
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation not found'
+      });
+    }
+
+    // Verify partner owns this quotation
+    if (!quotation.partner || quotation.partner._id.toString() !== req.partner._id.toString()) {
+      console.log('[Quotation] ❌ Authorization failed: Partner mismatch');
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to reject this quotation'
+      });
+    }
+
+    // Check if partner approval is required
+    if (quotation.partnerStatus !== 'pending') {
+      console.log('[Quotation] ❌ Partner has already responded');
+      return res.status(400).json({
+        success: false,
+        message: 'You have already responded to this quotation'
+      });
+    }
+
+    // Update partner status
+    quotation.partnerStatus = 'rejected';
+    quotation.partnerRejectionReason = rejectionReason || '';
+    quotation.partnerResponseAt = new Date();
+    await quotation.save();
+
+    // Populate for response
+    const updatedQuotation = await Quotation.findById(quotation._id)
+      .populate('booking')
+      .populate('user', 'name email phone')
+      .populate('partner', 'profile.name phone partnerType')
+      .populate('adminReviewedBy', 'name email');
+
+    console.log('[Quotation] ✅ Partner rejected quotation successfully');
+
+    res.status(200).json({
+      success: true,
+      message: 'Quotation rejected successfully',
+      data: updatedQuotation
+    });
+  } catch (error) {
+    console.error('[Quotation] ❌ Error rejecting quotation:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rejecting quotation',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+// Admin accept quotation (modified to check partner approval for franchise partners)
 exports.adminAcceptQuotation = async (req, res) => {
   try {
     const { quotationId } = req.params;
     const adminId = req.admin._id;
 
+    // Find quotation
     const quotation = await Quotation.findById(quotationId)
       .populate('booking')
-      .populate('partner')
+      .populate('partner', 'profile.name phone partnerType')
       .populate('user');
 
     if (!quotation) {
@@ -436,6 +892,22 @@ exports.adminAcceptQuotation = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'This quotation has already been reviewed by admin'
+      });
+    }
+
+    // Check if partner approval is required and pending (for franchise partners)
+    if (quotation.partner?.partnerType === 'franchise' && quotation.partnerStatus === 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'This quotation requires partner approval first. Please wait for the franchise partner to approve.'
+      });
+    }
+
+    // Check if partner rejected the quotation
+    if (quotation.partnerStatus === 'rejected') {
+      return res.status(400).json({
+        success: false,
+        message: 'This quotation has been rejected by the partner and cannot be approved by admin.'
       });
     }
 
@@ -618,17 +1090,18 @@ exports.adminRejectQuotation = async (req, res) => {
 // Get all quotations (Admin)
 exports.getAllQuotations = async (req, res) => {
   try {
-    const { status, customerStatus, adminStatus } = req.query;
+    const { status, customerStatus, partnerStatus, adminStatus } = req.query;
     const filter = {};
 
     if (status) filter.status = status;
     if (customerStatus) filter.customerStatus = customerStatus;
+    if (partnerStatus) filter.partnerStatus = partnerStatus;
     if (adminStatus) filter.adminStatus = adminStatus;
 
     const quotations = await Quotation.find(filter)
       .populate('booking')
       .populate('user', 'name email phone')
-      .populate('partner', 'profile.name phone')
+      .populate('partner', 'profile.name phone partnerType')
       .populate('adminReviewedBy', 'name email')
       .sort({ createdAt: -1 });
 
@@ -675,6 +1148,93 @@ exports.getQuotationById = async (req, res) => {
       success: false,
       message: 'Error fetching quotation',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Delete quotation (Partner only - if not accepted)
+exports.deleteQuotation = async (req, res) => {
+  try {
+    const { quotationId } = req.params;
+
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] DELETE QUOTATION REQUEST');
+    console.log('[Quotation] ========================================');
+    console.log('[Quotation] Quotation ID:', quotationId);
+    console.log('[Quotation] Partner ID:', req.partner?._id);
+    console.log('[Quotation] ========================================');
+
+    // Check if partner is authenticated
+    if (!req.partner || !req.partner._id) {
+      console.log('[Quotation] ❌ Partner not authenticated');
+      return res.status(401).json({
+        success: false,
+        message: 'Partner authentication required'
+      });
+    }
+
+    // Validate quotation ID format
+    if (!mongoose.Types.ObjectId.isValid(quotationId)) {
+      console.log('[Quotation] ❌ Invalid quotation ID format:', quotationId);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quotation ID format'
+      });
+    }
+
+    // Find quotation
+    const quotation = await Quotation.findById(quotationId)
+      .populate('booking')
+      .populate('user', 'name email phone')
+      .populate('partner', 'profile.name phone');
+
+    if (!quotation) {
+      console.log('[Quotation] ❌ Quotation not found:', quotationId);
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation not found'
+      });
+    }
+
+    console.log('[Quotation] ✅ Quotation found:', quotation._id);
+    console.log('[Quotation] Quotation partner:', quotation.partner?._id);
+    console.log('[Quotation] Request partner:', req.partner._id);
+    console.log('[Quotation] Customer status:', quotation.customerStatus);
+    console.log('[Quotation] Admin status:', quotation.adminStatus);
+
+    // Verify partner owns this quotation
+    if (!quotation.partner || quotation.partner._id.toString() !== req.partner._id.toString()) {
+      console.log('[Quotation] ❌ Authorization failed: Partner mismatch');
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to delete this quotation'
+      });
+    }
+
+    // Check if quotation can be deleted (only if both customer and admin status are pending)
+    if (quotation.customerStatus !== 'pending' || quotation.adminStatus !== 'pending') {
+      console.log('[Quotation] ❌ Cannot delete: Quotation has been responded to');
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete quotation that has been accepted or rejected by customer or admin'
+      });
+    }
+
+    // Delete the quotation
+    await Quotation.findByIdAndDelete(quotationId);
+
+    console.log('[Quotation] ✅ Quotation deleted successfully');
+
+    res.status(200).json({
+      success: true,
+      message: 'Quotation deleted successfully'
+    });
+  } catch (error) {
+    console.error('[Quotation] ❌ Error deleting quotation:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting quotation',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };

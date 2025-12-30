@@ -12,7 +12,7 @@ const options = {
       {
         url: process.env.NODE_ENV === 'production' 
           ? process.env.PRODUCTION_API_URL 
-          : process.env.BASE_URL || 'https://nexo.works',
+          : process.env.BASE_URL || 'http://localhost:9088',
         description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Development server',
       },
     ],

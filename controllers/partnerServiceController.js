@@ -2403,8 +2403,8 @@ exports.initiateOrderPayment = async (req, res) => {
       firstname: order.partner.profile?.name || 'Partner',
       email: order.partner.profile?.email || 'partner@nexo.com',
       phone: order.partner.phone,
-      surl: `${process.env.BASE_URL || 'https://nexo.works'}/api/partner/order-payment-success`,
-      furl: `${process.env.BASE_URL || 'https://nexo.works'}/api/partner/order-payment-failure`,
+      surl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/partner/order-payment-success`,
+      furl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/partner/order-payment-failure`,
       salt: PAYU_CONFIG.salt,
     };
 

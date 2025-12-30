@@ -14,7 +14,7 @@ async function testCartAPI() {
       return;
     }
     
-    const baseURL = 'https://nexo.works/api/partner';
+    const baseURL = 'http://localhost:9088/api/partner';
     
     // Test 1: Get Cart
     console.log('\n📦 Testing GET /cart...');

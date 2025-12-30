@@ -16,7 +16,7 @@ const testAdminLogin = async () => {
     try {
       console.log(`\n🔐 Testing: ${cred.email} / ${cred.password}`);
       
-      const response = await axios.post('https://nexo.works/api/admin/login', cred);
+      const response = await axios.post('http://localhost:9088/api/admin/login', cred);
       
       if (response.data.success) {
         console.log('✅ Login successful!');
@@ -24,7 +24,7 @@ const testAdminLogin = async () => {
         
         // Test purchase orders API
         const token = response.data.token;
-        const poResponse = await axios.get('https://nexo.works/api/admin/inventory/purchase-orders', {
+        const poResponse = await axios.get('http://localhost:9088/api/admin/inventory/purchase-orders', {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'

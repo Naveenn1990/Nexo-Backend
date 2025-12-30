@@ -143,6 +143,25 @@ exports.updateInventoryItem = async (req, res) => {
       });
     }
 
+    // Check if SKU is being updated and if it conflicts with existing items
+    if (req.body.sku && req.body.sku !== item.sku) {
+      const existingItem = await InventoryItem.findOne({ 
+        sku: req.body.sku.toUpperCase(),
+        _id: { $ne: req.params.id }, // Exclude current item
+        isActive: true 
+      });
+      
+      if (existingItem) {
+        return res.status(400).json({
+          success: false,
+          message: 'SKU already exists'
+        });
+      }
+      
+      // Convert SKU to uppercase
+      req.body.sku = req.body.sku.toUpperCase();
+    }
+
     // Track stock changes
     const previousStock = item.stock;
     const newStock = req.body.stock !== undefined ? req.body.stock : item.stock;
@@ -186,6 +205,95 @@ exports.updateInventoryItem = async (req, res) => {
       success: true,
       message: 'Inventory item updated successfully',
       data: item
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'SKU already exists'
+      });
+    }
+    errorHandler(res, error);
+  }
+};
+
+// Update inventory stock specifically
+exports.updateInventoryStock = async (req, res) => {
+  try {
+    const { action, quantity, reason, notes, location, supplier } = req.body;
+    
+    if (!action || !quantity || !reason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Action, quantity, and reason are required'
+      });
+    }
+
+    const item = await InventoryItem.findById(req.params.id);
+    
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
+    }
+
+    const previousStock = item.stock;
+    let newStock;
+
+    if (action === 'add') {
+      newStock = previousStock + parseInt(quantity);
+    } else if (action === 'remove') {
+      newStock = Math.max(0, previousStock - parseInt(quantity));
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid action. Must be "add" or "remove"'
+      });
+    }
+
+    // Update stock
+    item.stock = newStock;
+    
+    // Update location if provided
+    if (location) {
+      item.location = location;
+    }
+
+    // Update supplier if provided (for any transaction type)
+    if (supplier) {
+      item.supplier = supplier;
+    }
+
+    // Add history entry
+    if (!item.history) {
+      item.history = [];
+    }
+    
+    item.history.push({
+      action: action === 'add' ? 'stock_added' : 'stock_removed',
+      previousValue: previousStock,
+      newValue: newStock,
+      quantity: parseInt(quantity),
+      reason: reason,
+      notes: notes || '',
+      supplier: supplier || item.supplier || 'Not specified',
+      changedBy: req.admin?._id,
+      timestamp: new Date()
+    });
+
+    await item.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Stock ${action === 'add' ? 'added' : 'removed'} successfully`,
+      data: {
+        previousStock,
+        newStock,
+        quantity: parseInt(quantity),
+        action,
+        supplier: supplier || item.supplier
+      }
     });
   } catch (error) {
     errorHandler(res, error);

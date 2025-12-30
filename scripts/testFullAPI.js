@@ -6,7 +6,7 @@ const testFullAPI = async () => {
   try {
     // Step 1: Login
     console.log('\n🔐 Step 1: Admin Login');
-    const loginResponse = await axios.post('https://nexo.works/api/admin/login', {
+    const loginResponse = await axios.post('http://localhost:9088/api/admin/login', {
       email: 'test@nexo.com',
       password: 'test123'
     });
@@ -21,7 +21,7 @@ const testFullAPI = async () => {
     
     // Step 2: Test Purchase Orders API
     console.log('\n📋 Step 2: Fetch Purchase Orders');
-    const poResponse = await axios.get('https://nexo.works/api/admin/inventory/purchase-orders', {
+    const poResponse = await axios.get('http://localhost:9088/api/admin/inventory/purchase-orders', {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'

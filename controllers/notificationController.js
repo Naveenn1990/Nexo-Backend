@@ -180,7 +180,7 @@ const sendTestNotification = async (req, res) => {
       });
     }
 
-    const iconUrl = 'https://nexo.works/android-chrome-192x192.png';
+    const iconUrl = 'http://localhost:9088/android-chrome-192x192.png';
     const message = {
       notification: {
         title: 'Test Notification',

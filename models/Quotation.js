@@ -21,6 +21,28 @@ const quotationItemSchema = new mongoose.Schema({
   total: {
     type: Number,
     required: true
+  },
+  // Material reference for items selected from inventory
+  materialId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'InventoryItem',
+    default: null,
+    validate: {
+      validator: function(v) {
+        // Allow null values, but if provided, must be a valid ObjectId
+        return v === null || mongoose.Types.ObjectId.isValid(v);
+      },
+      message: 'materialId must be a valid ObjectId or null'
+    }
+  },
+  category: {
+    type: String,
+    default: ''
+  },
+  // Flag to indicate if this is a manual item or from material catalog
+  isManual: {
+    type: Boolean,
+    default: true // true for manual items, false for material catalog items
   }
 }, { _id: false });
 
@@ -74,6 +96,16 @@ const quotationSchema = new mongoose.Schema({
   },
   customerResponseAt: Date,
   customerRejectionReason: String,
+  
+  // Partner approval status (for franchise partners)
+  partnerStatus: {
+    type: String,
+    enum: ['pending', 'accepted', 'rejected', 'not_required'],
+    default: 'pending'
+  },
+  partnerResponseAt: Date,
+  partnerRejectionReason: String,
+  
   // Admin approval status
   adminStatus: {
     type: String,
@@ -119,13 +151,22 @@ quotationSchema.pre('validate', async function(next) {
       const Counter = require('./Counter');
       
       console.log('[Quotation] Generating quotation number...');
+      
+      // Ensure counter exists first
+      await Counter.findOneAndUpdate(
+        { _id: 'quotation' },
+        { $setOnInsert: { sequence: 0 } },
+        { upsert: true }
+      );
+      
       const counter = await Counter.findOneAndUpdate(
         { _id: 'quotation' },
         { $inc: { sequence: 1 } },
-        { upsert: true, new: true }
+        { new: true }
       );
       
       if (!counter || counter.sequence === undefined) {
+        console.error('[Quotation] ❌ Failed to get counter for quotation number');
         throw new Error('Failed to get counter for quotation number');
       }
       
@@ -136,7 +177,10 @@ quotationSchema.pre('validate', async function(next) {
     next();
   } catch (error) {
     console.error('[Quotation] ❌ Error in pre-validate hook:', error);
-    console.error('[Quotation] Error details:', error.message, error.stack);
+    console.error('[Quotation] Error details:', error.message);
+    if (error.stack) {
+      console.error('[Quotation] Error stack:', error.stack);
+    }
     next(error);
   }
 });
@@ -144,17 +188,24 @@ quotationSchema.pre('validate', async function(next) {
 // Pre-save hook for status updates
 quotationSchema.pre('save', async function(next) {
   try {
-    // Update overall status based on customer and admin statuses
-    if (this.customerStatus === 'rejected' || this.adminStatus === 'rejected') {
+    // Update overall status based on customer, partner, and admin statuses
+    if (this.customerStatus === 'rejected' || this.partnerStatus === 'rejected' || this.adminStatus === 'rejected') {
       this.status = 'rejected';
-    } else if (this.customerStatus === 'accepted' && this.adminStatus === 'accepted') {
+    } else if (this.customerStatus === 'accepted' && this.adminStatus === 'accepted' && 
+               (this.partnerStatus === 'accepted' || this.partnerStatus === 'not_required')) {
       this.status = 'approved';
-    } else if (this.customerStatus === 'accepted' && this.adminStatus === 'pending') {
-      this.status = 'customer_accepted';
+    } else if (this.customerStatus === 'accepted' && this.partnerStatus === 'pending') {
+      this.status = 'customer_accepted_partner_pending';
+    } else if (this.customerStatus === 'accepted' && this.partnerStatus === 'accepted' && this.adminStatus === 'pending') {
+      this.status = 'partner_accepted_admin_pending';
+    } else if (this.customerStatus === 'accepted' && this.partnerStatus === 'not_required' && this.adminStatus === 'pending') {
+      this.status = 'customer_accepted_admin_pending';
     } else if (this.adminStatus === 'accepted' && this.customerStatus === 'pending') {
       this.status = 'admin_accepted';
     } else if (this.customerStatus === 'rejected') {
       this.status = 'customer_rejected';
+    } else if (this.partnerStatus === 'rejected') {
+      this.status = 'partner_rejected';
     } else if (this.adminStatus === 'rejected') {
       this.status = 'admin_rejected';
     }

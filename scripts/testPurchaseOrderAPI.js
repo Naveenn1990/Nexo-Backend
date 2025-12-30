@@ -8,7 +8,7 @@ const testPurchaseOrderAPI = async () => {
     console.log('\n📋 Test 1: API Endpoint Reachability');
     
     try {
-      const response = await axios.get('https://nexo.works/api/admin/inventory/purchase-orders', {
+      const response = await axios.get('http://localhost:9088/api/admin/inventory/purchase-orders', {
         timeout: 5000
       });
       console.log('✅ API endpoint is reachable');
