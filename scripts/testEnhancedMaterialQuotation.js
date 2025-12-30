@@ -44,7 +44,7 @@ const testEnhancedMaterialQuotation = async () => {
     console.log('\n📋 Test 1: Submit Enhanced Material Quotation');
     console.log('===============================================');
     
-    const response = await axios.post('http://localhost:9088/api/user/material-quotation', quotationData, {
+    const response = await axios.post('https://nexo.works/api/user/material-quotation', quotationData, {
       headers: {
         'Content-Type': 'application/json'
       }
@@ -61,7 +61,7 @@ const testEnhancedMaterialQuotation = async () => {
       console.log('\n🔐 Test 2: Admin Login');
       console.log('======================');
       
-      const loginResponse = await axios.post('http://localhost:9088/api/admin/login', {
+      const loginResponse = await axios.post('https://nexo.works/api/admin/login', {
         email: 'test@nexo.com',
         password: 'test123'
       });
@@ -74,7 +74,7 @@ const testEnhancedMaterialQuotation = async () => {
         console.log('\n📋 Test 3: Fetch Material Quotations');
         console.log('====================================');
         
-        const quotationsResponse = await axios.get('http://localhost:9088/api/admin/material-quotations', {
+        const quotationsResponse = await axios.get('https://nexo.works/api/admin/material-quotations', {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -94,7 +94,7 @@ const testEnhancedMaterialQuotation = async () => {
           notes: 'Approved with slight price adjustment. Quality materials will be provided.'
         };
         
-        const approvalResponse = await axios.put(`http://localhost:9088/api/admin/material-quotations/${requestId}/approve`, approvalData, {
+        const approvalResponse = await axios.put(`https://nexo.works/api/admin/material-quotations/${requestId}/approve`, approvalData, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -113,7 +113,7 @@ const testEnhancedMaterialQuotation = async () => {
           deliveryNotes: 'All materials delivered in good condition. Customer signature obtained.'
         };
         
-        const deliveryResponse = await axios.put(`http://localhost:9088/api/admin/material-quotations/${requestId}/delivered`, deliveryData, {
+        const deliveryResponse = await axios.put(`https://nexo.works/api/admin/material-quotations/${requestId}/delivered`, deliveryData, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'

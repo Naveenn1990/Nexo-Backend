@@ -4,7 +4,7 @@ async function testMaterialAPI() {
   try {
     console.log('🔍 Testing Material Categories API...');
     
-    const apiUrl = 'http://localhost:9088';
+    const apiUrl = 'https://nexo.works';
     const response = await fetch(`${apiUrl}/api/public/material-categories`);
     
     console.log('📡 API Response Status:', response.status);

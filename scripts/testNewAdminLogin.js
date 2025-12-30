@@ -6,7 +6,7 @@ const testNewAdminLogin = async () => {
   try {
     console.log('🔐 Testing: test@nexo.com / test123');
     
-    const response = await axios.post('http://localhost:9088/api/admin/login', {
+    const response = await axios.post('https://nexo.works/api/admin/login', {
       email: 'test@nexo.com',
       password: 'test123'
     });
@@ -19,7 +19,7 @@ const testNewAdminLogin = async () => {
       const token = response.data.token;
       console.log('\n📋 Testing Purchase Orders API...');
       
-      const poResponse = await axios.get('http://localhost:9088/api/admin/inventory/purchase-orders', {
+      const poResponse = await axios.get('https://nexo.works/api/admin/inventory/purchase-orders', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

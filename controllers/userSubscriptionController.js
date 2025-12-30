@@ -104,8 +104,8 @@ exports.initiateSubscriptionPayment = async (req, res) => {
       firstname: user.name || 'User',
       email: user.email || `${user.phone}@nexo.com`,
       phone: user.phone,
-      surl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/user/subscription/payment-success`,
-      furl: `${process.env.BASE_URL || 'http://localhost:9088'}/api/user/subscription/payment-failure`,
+      surl: `${process.env.BASE_URL || 'https://nexo.works'}/api/user/subscription/payment-success`,
+      furl: `${process.env.BASE_URL || 'https://nexo.works'}/api/user/subscription/payment-failure`,
       salt: PAYU_CONFIG.salt,
     };
 
