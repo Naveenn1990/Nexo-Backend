@@ -109,8 +109,8 @@ const quotationSchema = new mongoose.Schema({
   // Admin approval status
   adminStatus: {
     type: String,
-    enum: ['pending', 'accepted', 'rejected'],
-    default: 'pending'
+    enum: ['pending', 'accepted', 'rejected', 'not_required'],
+    default: 'not_required'
   },
   adminResponseAt: Date,
   adminRejectionReason: String,
@@ -188,26 +188,22 @@ quotationSchema.pre('validate', async function(next) {
 // Pre-save hook for status updates
 quotationSchema.pre('save', async function(next) {
   try {
-    // Update overall status based on customer, partner, and admin statuses
-    if (this.customerStatus === 'rejected' || this.partnerStatus === 'rejected' || this.adminStatus === 'rejected') {
+    // Update overall status based on customer and partner statuses (no admin approval needed)
+    if (this.customerStatus === 'rejected' || this.partnerStatus === 'rejected') {
       this.status = 'rejected';
-    } else if (this.customerStatus === 'accepted' && this.adminStatus === 'accepted' && 
+    } else if (this.customerStatus === 'accepted' && 
                (this.partnerStatus === 'accepted' || this.partnerStatus === 'not_required')) {
       this.status = 'approved';
     } else if (this.customerStatus === 'accepted' && this.partnerStatus === 'pending') {
       this.status = 'customer_accepted_partner_pending';
-    } else if (this.customerStatus === 'accepted' && this.partnerStatus === 'accepted' && this.adminStatus === 'pending') {
-      this.status = 'partner_accepted_admin_pending';
-    } else if (this.customerStatus === 'accepted' && this.partnerStatus === 'not_required' && this.adminStatus === 'pending') {
-      this.status = 'customer_accepted_admin_pending';
-    } else if (this.adminStatus === 'accepted' && this.customerStatus === 'pending') {
-      this.status = 'admin_accepted';
+    } else if (this.partnerStatus === 'accepted' && this.customerStatus === 'pending') {
+      this.status = 'partner_accepted_customer_pending';
     } else if (this.customerStatus === 'rejected') {
       this.status = 'customer_rejected';
     } else if (this.partnerStatus === 'rejected') {
       this.status = 'partner_rejected';
-    } else if (this.adminStatus === 'rejected') {
-      this.status = 'admin_rejected';
+    } else {
+      this.status = 'pending';
     }
     
     next();

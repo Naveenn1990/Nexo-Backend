@@ -23,6 +23,12 @@ const bookingSchema = new mongoose.Schema(
       ref: "SubService",
       required: false  // Made optional for service bookings
     },
+    // Popular Service reference for AiSensy integration
+    popularService: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PopularService",
+      required: false
+    },
     // New fields for service booking flow
     serviceName: { type: String },
     serviceData: { type: mongoose.Schema.Types.Mixed },

@@ -798,6 +798,8 @@ const payuRoutes = require('./routes/payuRoutes');
 const serviceBookingRoutes = require('./routes/serviceBookingRoutes');
 const amcRoutes = require('./routes/amcRoutes');
 const cityRoutes = require('./routes/cityRoutes');
+const aisensyRoutes = require('./routes/aisensyRoutes');
+
 // Initialize Firebase Admin
 try {
   // Check if Firebase is already initialized
@@ -867,6 +869,9 @@ app.use('/api', amcRoutes);
 
 // City Routes
 app.use('/api/cities', cityRoutes);
+
+// AiSensy Integration Routes (Public - No Authentication Required)
+app.use('/api/aisensy', aisensyRoutes);
 
 // Customer Booking Routes (Admin)
 const customerBookingRoutes = require('./routes/customerBookingRoutes');

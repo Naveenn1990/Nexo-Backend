@@ -265,7 +265,7 @@ exports.createQuotation = async (req, res) => {
       notes: String(notes || '').trim(),
       customerStatus: 'pending',
       partnerStatus: initialPartnerStatus,
-      adminStatus: 'pending',
+      adminStatus: 'not_required', // Admin approval not needed
       status: 'pending'
     };
 
@@ -1211,12 +1211,12 @@ exports.deleteQuotation = async (req, res) => {
       });
     }
 
-    // Check if quotation can be deleted (only if both customer and admin status are pending)
-    if (quotation.customerStatus !== 'pending' || quotation.adminStatus !== 'pending') {
-      console.log('[Quotation] ❌ Cannot delete: Quotation has been responded to');
+    // Check if quotation can be deleted (only if customer status is pending)
+    if (quotation.customerStatus !== 'pending') {
+      console.log('[Quotation] ❌ Cannot delete: Quotation has been responded to by customer');
       return res.status(400).json({
         success: false,
-        message: 'Cannot delete quotation that has been accepted or rejected by customer or admin'
+        message: 'Cannot delete quotation that has been accepted or rejected by customer'
       });
     }
 
