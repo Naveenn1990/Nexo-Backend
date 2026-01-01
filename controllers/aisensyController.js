@@ -7,9 +7,85 @@ const Review = require("../models/Review");
 const Quotation = require("../models/Quotation");
 const admin = require("firebase-admin");
 
+// Helper function to process add-ons and sub-services
+const processAddOnsAndSubServices = (popularService, addOnNames) => {
+  let selectedAddOns = [];
+  let totalAddOnAmount = 0;
+  
+  if (addOnNames && addOnNames.trim()) {
+    const addOnNamesList = addOnNames.split(',').map(name => name.trim());
+    console.log("   Processing add-ons/sub-services:", addOnNamesList);
+    
+    for (const itemName of addOnNamesList) {
+      let foundItem = false;
+      
+      // Search through all add-ons
+      for (const addOn of popularService.addOns) {
+        // First, check if it's a sub-service within this add-on
+        if (addOn.subServices && addOn.subServices.length > 0) {
+          const subService = addOn.subServices.find(sub => 
+            sub.name.toLowerCase().includes(itemName.toLowerCase()) ||
+            itemName.toLowerCase().includes(sub.name.toLowerCase())
+          );
+          
+          if (subService) {
+            // Extract price from string format (e.g., "₹150" -> 150)
+            let subServicePrice = 0;
+            if (subService.price) {
+              const priceMatch = subService.price.match(/\d+/);
+              subServicePrice = priceMatch ? parseInt(priceMatch[0]) : 0;
+            }
+            
+            selectedAddOns.push({
+              addOnId: addOn._id,
+              subServiceId: subService._id,
+              name: subService.name,
+              description: subService.shortDescription || subService.description || '',
+              basePrice: subServicePrice,
+              price: subService.price,
+              parentAddOn: addOn.name,
+              type: 'subservice'
+            });
+            totalAddOnAmount += subServicePrice;
+            console.log(`   Found sub-service: ${subService.name} in ${addOn.name} - ₹${subServicePrice}`);
+            foundItem = true;
+            break;
+          }
+        }
+        
+        // If not found as sub-service, check if it matches the add-on itself
+        if (!foundItem && (
+          addOn.name.toLowerCase().includes(itemName.toLowerCase()) ||
+          itemName.toLowerCase().includes(addOn.name.toLowerCase())
+        )) {
+          selectedAddOns.push({
+            addOnId: addOn._id,
+            name: addOn.name,
+            description: addOn.description,
+            basePrice: addOn.basePrice,
+            price: addOn.price,
+            type: 'addon'
+          });
+          totalAddOnAmount += addOn.basePrice || 0;
+          console.log(`   Found add-on: ${addOn.name} - ₹${addOn.basePrice}`);
+          foundItem = true;
+          break;
+        }
+      }
+      
+      if (!foundItem) {
+        console.log(`   Item not found: ${itemName}`);
+      }
+    }
+  }
+  
+  return { selectedAddOns, totalAddOnAmount };
+};
+
 /**
  * Create a booking for customer via AiSensy (No Authentication Required)
  * This API allows AiSensy to create bookings on behalf of customers
+ * Handles string-only inputs and optional add-on services
  */
 exports.createCustomerBooking = async (req, res) => {
   try {
@@ -23,30 +99,32 @@ exports.createCustomerBooking = async (req, res) => {
       customerName,
       customerEmail,
       serviceName,
-      subServiceId,
+      serviceId,
+      addOnNames, // Comma-separated string of add-on names
       scheduledDate,
       scheduledTime,
-      location,
-      amount,
+      locationAddress, // Flattened from location.address
+      locationLandmark, // Flattened from location.landmark
+      locationPincode, // Flattened from location.pincode
+      amount, // Will be string, need to convert
       paymentMode = "cash",
       specialInstructions,
       lat,
       lng
     } = req.body;
 
-    // Validate required fields
-    if (!customerPhone || !customerName || !serviceName || !scheduledDate || !scheduledTime || !location?.address || !amount) {
+    // Validate required fields (removed amount from required fields)
+    if (!customerPhone || !customerName || !serviceName || !scheduledDate || !scheduledTime || !locationAddress) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: customerPhone, customerName, serviceName, scheduledDate, scheduledTime, location.address, amount are required",
+        message: "Missing required fields: customerPhone, customerName, serviceName, scheduledDate, scheduledTime, locationAddress are required",
         received: {
           customerPhone: !!customerPhone,
           customerName: !!customerName,
           serviceName: !!serviceName,
           scheduledDate: !!scheduledDate,
           scheduledTime: !!scheduledTime,
-          locationAddress: !!location?.address,
-          amount: !!amount
+          locationAddress: !!locationAddress
         }
       });
     }
@@ -58,6 +136,18 @@ exports.createCustomerBooking = async (req, res) => {
         success: false,
         message: "Invalid phone number format"
       });
+    }
+
+    // Convert amount from string to number (if provided, otherwise will be calculated)
+    let providedAmount = 0;
+    if (amount) {
+      providedAmount = parseFloat(amount);
+      if (isNaN(providedAmount) || providedAmount < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid amount. Must be a positive number or omit for auto-calculation"
+        });
+      }
     }
 
     // Validate date is in the future
@@ -103,9 +193,9 @@ exports.createCustomerBooking = async (req, res) => {
 
     // Find popular service
     let popularService = null;
-    if (subServiceId) {
-      // If subServiceId is provided, treat it as popularServiceId
-      popularService = await PopularService.findById(subServiceId);
+    if (serviceId) {
+      // If serviceId is provided as string
+      popularService = await PopularService.findById(serviceId);
     } else {
       // Try to find popular service by name
       popularService = await PopularService.findOne({ 
@@ -131,6 +221,45 @@ exports.createCustomerBooking = async (req, res) => {
 
     console.log("   Found popular service:", popularService.name, "ID:", popularService._id);
 
+    // Process add-ons if provided
+    let selectedAddOns = [];
+    let totalAddOnAmount = 0;
+    
+    if (addOnNames && addOnNames.trim()) {
+      const addOnNamesList = addOnNames.split(',').map(name => name.trim());
+      console.log("   Processing add-ons:", addOnNamesList);
+      
+      for (const addOnName of addOnNamesList) {
+        const addOn = popularService.addOns.find(addon => 
+          addon.name.toLowerCase().includes(addOnName.toLowerCase()) ||
+          addOnName.toLowerCase().includes(addon.name.toLowerCase())
+        );
+        
+        if (addOn) {
+          selectedAddOns.push({
+            addOnId: addOn._id,
+            name: addOn.name,
+            description: addOn.description,
+            basePrice: addOn.basePrice,
+            price: addOn.price
+          });
+          totalAddOnAmount += addOn.basePrice || 0;
+          console.log(`   Found add-on: ${addOn.name} - ₹${addOn.basePrice}`);
+        } else {
+          console.log(`   Add-on not found: ${addOnName}`);
+        }
+      }
+    }
+
+    // Calculate total amount (base service + add-ons)
+    const baseServiceAmount = popularService.basePrice || numericAmount;
+    const finalAmount = numericAmount; // Use the amount provided by AiSensy (should include add-ons)
+    
+    console.log("   Pricing breakdown:");
+    console.log(`   - Base service: ₹${baseServiceAmount}`);
+    console.log(`   - Add-ons total: ₹${totalAddOnAmount}`);
+    console.log(`   - Final amount: ₹${finalAmount}`);
+
     // Create booking
     const booking = new Booking({
       user: user._id,
@@ -144,18 +273,19 @@ exports.createCustomerBooking = async (req, res) => {
       scheduledDate: bookingDate,
       scheduledTime: scheduledTime,
       location: {
-        address: location.address,
-        landmark: location.landmark || "",
-        pincode: location.pincode || ""
+        address: locationAddress,
+        landmark: locationLandmark || "",
+        pincode: locationPincode || ""
       },
-      amount: amount,
-      totalAmount: amount,
+      amount: finalAmount,
+      totalAmount: finalAmount,
       status: "pending",
       paymentMode: paymentMode,
       paymentStatus: "pending",
       specialInstructions: specialInstructions,
       lat: lat,
       lng: lng,
+      selectedAddOns: selectedAddOns, // Store selected add-ons
       createdVia: "aisensy"
     });
 
@@ -186,12 +316,17 @@ exports.createCustomerBooking = async (req, res) => {
         customerName: user.name,
         customerPhone: user.phone,
         serviceName: popularService.name,
+        selectedAddOns: selectedAddOns,
         status: booking.status,
         paymentStatus: booking.paymentStatus,
         scheduledDate: scheduledDate,
         scheduledTime: scheduledTime,
-        amount: amount,
-        location: booking.location,
+        amount: finalAmount,
+        location: {
+          address: locationAddress,
+          landmark: locationLandmark || "",
+          pincode: locationPincode || ""
+        },
         createdAt: booking.createdAt
       }
     });
@@ -209,6 +344,7 @@ exports.createCustomerBooking = async (req, res) => {
 /**
  * Create a booking for partner via AiSensy (No Authentication Required)
  * This API allows AiSensy to create bookings and assign them directly to partners
+ * Handles string-only inputs and optional add-on services
  */
 exports.createPartnerBooking = async (req, res) => {
   try {
@@ -223,11 +359,14 @@ exports.createPartnerBooking = async (req, res) => {
       customerName,
       customerEmail,
       serviceName,
-      subServiceId,
+      serviceId,
+      addOnNames, // Comma-separated string of add-on names
       scheduledDate,
       scheduledTime,
-      location,
-      amount,
+      locationAddress, // Flattened from location.address
+      locationLandmark, // Flattened from location.landmark
+      locationPincode, // Flattened from location.pincode
+      amount, // Will be string, need to convert
       paymentMode = "cash",
       specialInstructions,
       lat,
@@ -235,10 +374,10 @@ exports.createPartnerBooking = async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!partnerPhone || !customerPhone || !customerName || !serviceName || !scheduledDate || !scheduledTime || !location?.address || !amount) {
+    if (!partnerPhone || !customerPhone || !customerName || !serviceName || !scheduledDate || !scheduledTime || !locationAddress || !amount) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: partnerPhone, customerPhone, customerName, serviceName, scheduledDate, scheduledTime, location.address, amount are required",
+        message: "Missing required fields: partnerPhone, customerPhone, customerName, serviceName, scheduledDate, scheduledTime, locationAddress, amount are required",
         received: {
           partnerPhone: !!partnerPhone,
           customerPhone: !!customerPhone,
@@ -246,7 +385,7 @@ exports.createPartnerBooking = async (req, res) => {
           serviceName: !!serviceName,
           scheduledDate: !!scheduledDate,
           scheduledTime: !!scheduledTime,
-          locationAddress: !!location?.address,
+          locationAddress: !!locationAddress,
           amount: !!amount
         }
       });
@@ -264,6 +403,15 @@ exports.createPartnerBooking = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Invalid customer phone number format"
+      });
+    }
+
+    // Convert amount from string to number
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid amount. Must be a positive number"
       });
     }
 
@@ -326,9 +474,9 @@ exports.createPartnerBooking = async (req, res) => {
 
     // Find popular service
     let popularService = null;
-    if (subServiceId) {
-      // If subServiceId is provided, treat it as popularServiceId
-      popularService = await PopularService.findById(subServiceId);
+    if (serviceId) {
+      // If serviceId is provided as string
+      popularService = await PopularService.findById(serviceId);
     } else {
       popularService = await PopularService.findOne({ 
         name: { $regex: new RegExp(serviceName, 'i') },
@@ -353,6 +501,45 @@ exports.createPartnerBooking = async (req, res) => {
 
     console.log("   Found popular service:", popularService.name, "ID:", popularService._id);
 
+    // Process add-ons if provided
+    let selectedAddOns = [];
+    let totalAddOnAmount = 0;
+    
+    if (addOnNames && addOnNames.trim()) {
+      const addOnNamesList = addOnNames.split(',').map(name => name.trim());
+      console.log("   Processing add-ons:", addOnNamesList);
+      
+      for (const addOnName of addOnNamesList) {
+        const addOn = popularService.addOns.find(addon => 
+          addon.name.toLowerCase().includes(addOnName.toLowerCase()) ||
+          addOnName.toLowerCase().includes(addon.name.toLowerCase())
+        );
+        
+        if (addOn) {
+          selectedAddOns.push({
+            addOnId: addOn._id,
+            name: addOn.name,
+            description: addOn.description,
+            basePrice: addOn.basePrice,
+            price: addOn.price
+          });
+          totalAddOnAmount += addOn.basePrice || 0;
+          console.log(`   Found add-on: ${addOn.name} - ₹${addOn.basePrice}`);
+        } else {
+          console.log(`   Add-on not found: ${addOnName}`);
+        }
+      }
+    }
+
+    // Calculate total amount (base service + add-ons)
+    const baseServiceAmount = popularService.basePrice || numericAmount;
+    const finalAmount = numericAmount; // Use the amount provided by AiSensy (should include add-ons)
+    
+    console.log("   Pricing breakdown:");
+    console.log(`   - Base service: ₹${baseServiceAmount}`);
+    console.log(`   - Add-ons total: ₹${totalAddOnAmount}`);
+    console.log(`   - Final amount: ₹${finalAmount}`);
+
     // Create booking with partner assigned
     const booking = new Booking({
       user: user._id,
@@ -367,18 +554,19 @@ exports.createPartnerBooking = async (req, res) => {
       scheduledDate: bookingDate,
       scheduledTime: scheduledTime,
       location: {
-        address: location.address,
-        landmark: location.landmark || "",
-        pincode: location.pincode || ""
+        address: locationAddress,
+        landmark: locationLandmark || "",
+        pincode: locationPincode || ""
       },
-      amount: amount,
-      totalAmount: amount,
+      amount: finalAmount,
+      totalAmount: finalAmount,
       status: "accepted", // Set to accepted since partner is assigned
       paymentMode: paymentMode,
       paymentStatus: "pending",
       specialInstructions: specialInstructions,
       lat: lat,
       lng: lng,
+      selectedAddOns: selectedAddOns, // Store selected add-ons
       acceptedAt: new Date(),
       createdVia: "aisensy"
     });
@@ -414,13 +602,18 @@ exports.createPartnerBooking = async (req, res) => {
         partnerId: partner._id,
         partnerName: partner.profile?.name,
         partnerPhone: partner.phone,
-        serviceName: subService.name,
+        serviceName: popularService.name,
+        selectedAddOns: selectedAddOns,
         status: booking.status,
         paymentStatus: booking.paymentStatus,
         scheduledDate: scheduledDate,
         scheduledTime: scheduledTime,
-        amount: amount,
-        location: booking.location,
+        amount: finalAmount,
+        location: {
+          address: locationAddress,
+          landmark: locationLandmark || "",
+          pincode: locationPincode || ""
+        },
         otp: populatedBooking.otp,
         createdAt: booking.createdAt,
         acceptedAt: booking.acceptedAt
@@ -799,11 +992,12 @@ exports.submitCustomerReview = async (req, res) => {
       });
     }
 
-    // Validate rating
-    if (rating < 1 || rating > 5) {
+    // Convert rating from string to number and validate
+    const numericRating = parseInt(rating);
+    if (isNaN(numericRating) || numericRating < 1 || numericRating > 5) {
       return res.status(400).json({
         success: false,
-        message: "Rating must be between 1 and 5"
+        message: "Rating must be a number between 1 and 5"
       });
     }
 
@@ -863,7 +1057,7 @@ exports.submitCustomerReview = async (req, res) => {
       booking: bookingId,
       popularService: booking.popularService?._id,
       partner: booking.partner?._id,
-      rating: parseInt(rating),
+      rating: numericRating, // Use converted numeric rating
       comment: comment.trim(),
       status: 'pending', // Reviews need admin approval
       createdVia: "aisensy"
@@ -1336,6 +1530,15 @@ exports.partnerCreateQuotation = async (req, res) => {
       });
     }
 
+    // Convert totalAmount from string to number
+    const numericTotalAmount = parseFloat(totalAmount);
+    if (isNaN(numericTotalAmount) || numericTotalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid totalAmount. Must be a positive number"
+      });
+    }
+
     // Validate items array
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -1344,7 +1547,8 @@ exports.partnerCreateQuotation = async (req, res) => {
       });
     }
 
-    // Validate each item
+    // Validate and convert each item's numeric fields from strings
+    const processedItems = [];
     for (const item of items) {
       if (!item.description || !item.quantity || !item.unitPrice || !item.totalPrice) {
         return res.status(400).json({
@@ -1352,6 +1556,25 @@ exports.partnerCreateQuotation = async (req, res) => {
           message: "Each item must have description, quantity, unitPrice, and totalPrice"
         });
       }
+
+      // Convert string numbers to actual numbers
+      const quantity = parseFloat(item.quantity);
+      const unitPrice = parseFloat(item.unitPrice);
+      const totalPrice = parseFloat(item.totalPrice);
+
+      if (isNaN(quantity) || isNaN(unitPrice) || isNaN(totalPrice)) {
+        return res.status(400).json({
+          success: false,
+          message: "Item quantity, unitPrice, and totalPrice must be valid numbers"
+        });
+      }
+
+      processedItems.push({
+        description: item.description,
+        quantity: quantity,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice
+      });
     }
 
     // Find partner
@@ -1400,8 +1623,8 @@ exports.partnerCreateQuotation = async (req, res) => {
     const quotation = new Quotation({
       booking: bookingId,
       partner: partner._id,
-      items: items,
-      totalAmount: totalAmount,
+      items: processedItems, // Use processed items with converted numbers
+      totalAmount: numericTotalAmount, // Use converted total amount
       notes: notes || "",
       customerStatus: "pending",
       adminStatus: "pending",
@@ -1435,6 +1658,1210 @@ exports.partnerCreateQuotation = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error creating quotation",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+// Import PayU configuration and utilities from existing controller
+const crypto = require('crypto');
+
+// PayU Configuration
+const PAYU_CONFIG = {
+  key: process.env.PAYU_MERCHANT_KEY || 'YOUR_MERCHANT_KEY',
+  salt: process.env.PAYU_MERCHANT_SALT || 'YOUR_MERCHANT_SALT',
+  baseUrl: process.env.PAYU_BASE_URL || 'https://test.payu.in',
+  skipHashVerification: process.env.PAYU_SKIP_HASH_VERIFICATION === 'true',
+};
+
+// Generate PayU hash
+const generatePayUHash = (data) => {
+  const { key, txnid, amount, productinfo, firstname, email, salt } = data;
+  const hashString = `${key}|${txnid}|${amount}|${productinfo}|${firstname}|${email}|||||||||||${salt}`;
+  return crypto.createHash('sha512').update(hashString).digest('hex');
+};
+
+// Verify PayU hash for response
+const verifyPayUHash = (data) => {
+  const { salt, status, key, txnid, amount, productinfo, firstname, email, hash } = data;
+  const hashString = `${salt}|${status}|||||||||||${email}|${firstname}|${productinfo}|${amount}|${txnid}|${key}`;
+  const generatedHash = crypto.createHash('sha512').update(hashString).digest('hex');
+  return generatedHash === hash;
+};
+
+/**
+ * AiSensy PayU Payment Integration (No Authentication Required)
+ * This API allows AiSensy to initiate PayU payments for bookings
+ */
+exports.aisensyInitiatePayment = async (req, res) => {
+  try {
+    console.log("🤖 ============================================");
+    console.log("🤖 AISENSY PAYU PAYMENT INITIATION");
+    console.log("🤖 ============================================");
+    console.log("   Request Body:", JSON.stringify(req.body, null, 2));
+
+    const {
+      bookingId,
+      customerPhone,
+      customerName,
+      customerEmail,
+      amount, // String amount from AiSensy
+      productInfo = "Service Booking Payment"
+    } = req.body;
+
+    // Validate required fields
+    if (!bookingId || !customerPhone || !customerName || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: bookingId, customerPhone, customerName, amount are required"
+      });
+    }
+
+    // Convert amount from string to number
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid amount. Must be a positive number"
+      });
+    }
+
+    // Validate phone number format
+    const phoneRegex = /^[\+]?[1-9][\d]{3,14}$/;
+    if (!phoneRegex.test(customerPhone.replace(/\s+/g, ''))) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number format"
+      });
+    }
+
+    // Find and validate booking
+    const booking = await Booking.findById(bookingId)
+      .populate("user", "name phone email")
+      .populate("popularService", "name");
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found"
+      });
+    }
+
+    // Verify customer phone matches booking
+    if (booking.user.phone !== customerPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer phone number does not match booking"
+      });
+    }
+
+    // Check if booking can be paid for
+    if (booking.paymentStatus === "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Payment has already been completed for this booking"
+      });
+    }
+
+    if (["cancelled"].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot make payment for cancelled booking"
+      });
+    }
+
+    // Generate unique transaction ID
+    const txnid = `AISENSY_${bookingId}_${Date.now()}`;
+
+    // Use customer email or generate one if not provided
+    const email = customerEmail || booking.user.email || `${customerPhone.replace(/\D/g, '')}@aisensy.com`;
+
+    // Prepare PayU payment data
+    const paymentData = {
+      key: PAYU_CONFIG.key,
+      txnid,
+      amount: numericAmount.toString(),
+      productinfo: `${productInfo} - ${booking.popularService?.name || booking.serviceName}`,
+      firstname: customerName,
+      email,
+      phone: customerPhone,
+      surl: `${process.env.BASE_URL || 'https://nexo.works'}/api/aisensy/payu/payment-success`,
+      furl: `${process.env.BASE_URL || 'https://nexo.works'}/api/aisensy/payu/payment-failure`,
+      salt: PAYU_CONFIG.salt,
+    };
+
+    // Generate PayU hash
+    const hash = generatePayUHash(paymentData);
+
+    // Update booking with transaction details
+    booking.txnid = txnid;
+    booking.paymentDetails = {
+      gateway: 'payu',
+      txnid: txnid,
+      amount: numericAmount,
+      initiatedAt: new Date(),
+      initiatedVia: 'aisensy'
+    };
+    await booking.save();
+
+    console.log("   Payment initiated successfully");
+    console.log("   Transaction ID:", txnid);
+    console.log("   Amount:", numericAmount);
+    console.log("🤖 ============================================");
+
+    // Return PayU payment data
+    res.status(200).json({
+      success: true,
+      message: "Payment initiated successfully",
+      data: {
+        txnid: txnid,
+        bookingId: booking._id,
+        amount: numericAmount,
+        payuData: {
+          action: `${PAYU_CONFIG.baseUrl}/_payment`,
+          params: {
+            ...paymentData,
+            hash
+          }
+        },
+        // For AiSensy integration - direct payment URL
+        paymentUrl: `${PAYU_CONFIG.baseUrl}/_payment?${new URLSearchParams({
+          ...paymentData,
+          hash
+        }).toString()}`
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in aisensyInitiatePayment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error initiating payment",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+/**
+ * AiSensy PayU Payment Success Handler (No Authentication Required)
+ */
+exports.aisensyPaymentSuccess = async (req, res) => {
+  try {
+    console.log("🤖 ============================================");
+    console.log("🤖 AISENSY PAYU PAYMENT SUCCESS CALLBACK");
+    console.log("🤖 ============================================");
+    console.log("   Payment Data:", JSON.stringify(req.body, null, 2));
+
+    const paymentData = req.body;
+    const { txnid, mihpayid, status, amount } = paymentData;
+
+    // Verify hash (skip if configured for testing)
+    if (!PAYU_CONFIG.skipHashVerification) {
+      const isValid = verifyPayUHash({
+        ...paymentData,
+        salt: PAYU_CONFIG.salt
+      });
+
+      if (!isValid) {
+        console.error('❌ Invalid payment hash - Hash verification failed');
+        return res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment-result?status=failed&reason=invalid_hash&source=aisensy`);
+      }
+      
+      console.log('✅ Hash verification passed');
+    }
+
+    // Find booking by transaction ID
+    const booking = await Booking.findOne({ txnid: txnid })
+      .populate("user", "name phone email")
+      .populate("popularService", "name");
+
+    if (!booking) {
+      console.error('❌ Booking not found for transaction ID:', txnid);
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment-result?status=failed&reason=booking_not_found&source=aisensy`);
+    }
+
+    // Update booking payment status
+    if (status === 'success') {
+      booking.paymentStatus = 'completed';
+      booking.paymentMode = 'online';
+      booking.paymentDetails = {
+        ...booking.paymentDetails,
+        gateway: 'payu',
+        payuPaymentId: mihpayid,
+        txnid: txnid,
+        amount: parseFloat(amount),
+        completedAt: new Date(),
+        status: 'success'
+      };
+      
+      // If booking is pending, move it to confirmed
+      if (booking.status === 'pending') {
+        booking.status = 'confirmed';
+      }
+    } else {
+      booking.paymentStatus = 'failed';
+      booking.paymentDetails = {
+        ...booking.paymentDetails,
+        status: 'failed',
+        failedAt: new Date(),
+        failureReason: 'Payment failed at gateway'
+      };
+    }
+
+    await booking.save();
+
+    console.log("   Payment status updated for booking:", booking._id);
+    console.log("   Payment Status:", booking.paymentStatus);
+    console.log("🤖 ============================================");
+
+    // Redirect to payment result page
+    const redirectUrl = `${process.env.FRONTEND_URL || 'https://nexo.works'}/payment-result?status=${status}&txnid=${txnid}&payid=${mihpayid}&bookingId=${booking._id}&source=aisensy`;
+    res.redirect(redirectUrl);
+
+  } catch (error) {
+    console.error('❌ AiSensy payment success handler error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment-result?status=failed&reason=server_error&source=aisensy`);
+  }
+};
+
+/**
+ * AiSensy PayU Payment Failure Handler (No Authentication Required)
+ */
+exports.aisensyPaymentFailure = async (req, res) => {
+  try {
+    console.log("🤖 ============================================");
+    console.log("🤖 AISENSY PAYU PAYMENT FAILURE CALLBACK");
+    console.log("🤖 ============================================");
+    console.log("   Payment Data:", JSON.stringify(req.body, null, 2));
+
+    const paymentData = req.body;
+    const { txnid, status, amount } = paymentData;
+
+    // Find booking by transaction ID
+    const booking = await Booking.findOne({ txnid: txnid });
+
+    if (booking) {
+      // Update booking payment status
+      booking.paymentStatus = 'failed';
+      booking.paymentDetails = {
+        ...booking.paymentDetails,
+        status: 'failed',
+        failedAt: new Date(),
+        failureReason: 'Payment failed at gateway'
+      };
+      await booking.save();
+      
+      console.log("   Payment failure recorded for booking:", booking._id);
+    }
+
+    console.log("🤖 ============================================");
+
+    // Redirect to payment result page
+    const redirectUrl = `${process.env.FRONTEND_URL || 'https://nexo.works'}/payment-result?status=failed&txnid=${txnid}&bookingId=${booking?._id}&source=aisensy`;
+    res.redirect(redirectUrl);
+
+  } catch (error) {
+    console.error('❌ AiSensy payment failure handler error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://nexo.works'}/payment-result?status=failed&reason=server_error&source=aisensy`);
+  }
+};
+
+/**
+ * Check AiSensy payment status (No Authentication Required)
+ */
+exports.aisensyCheckPaymentStatus = async (req, res) => {
+  try {
+    const { txnid, bookingId } = req.params;
+
+    if (!txnid && !bookingId) {
+      return res.status(400).json({
+        success: false,
+        message: "Either transaction ID or booking ID is required"
+      });
+    }
+
+    // Find booking by transaction ID or booking ID
+    let booking;
+    if (txnid) {
+      booking = await Booking.findOne({ txnid: txnid })
+        .populate("user", "name phone")
+        .populate("popularService", "name");
+    } else {
+      booking = await Booking.findById(bookingId)
+        .populate("user", "name phone")
+        .populate("popularService", "name");
+    }
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found"
+      });
+    }
+
+    const response = {
+      success: true,
+      data: {
+        bookingId: booking._id,
+        txnid: booking.txnid,
+        paymentStatus: booking.paymentStatus,
+        paymentMode: booking.paymentMode,
+        amount: booking.totalAmount || booking.amount,
+        customerName: booking.user?.name,
+        customerPhone: booking.user?.phone,
+        serviceName: booking.popularService?.name || booking.serviceName,
+        paymentDetails: booking.paymentDetails
+      }
+    };
+
+    res.status(200).json(response);
+
+  } catch (error) {
+    console.error("❌ Error in aisensyCheckPaymentStatus:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error checking payment status",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+/**
+ * Simplified AiSensy Booking API - Minimal Request Data (No Authentication Required)
+ * This API requires only essential fields and auto-fills the rest with smart defaults
+ */
+exports.createSimpleBooking = async (req, res) => {
+  try {
+    console.log("🤖 ============================================");
+    console.log("🤖 AISENSY SIMPLE BOOKING REQUEST");
+    console.log("🤖 ============================================");
+    console.log("   Request Body:", JSON.stringify(req.body, null, 2));
+
+    const {
+      phone,        // Only phone is required
+      name,         // Optional - will use "Customer" if not provided
+      service,      // Optional - will use first available service if not provided
+      amount        // Optional - will use service base price if not provided
+    } = req.body;
+
+    // Validate only essential field
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required field: phone is required",
+        example: {
+          phone: "+919876543210",
+          name: "John Doe (optional)",
+          service: "AC Repair (optional)",
+          amount: "500 (optional)"
+        }
+      });
+    }
+
+    // Validate phone number format
+    const phoneRegex = /^[\+]?[1-9][\d]{3,14}$/;
+    if (!phoneRegex.test(phone.replace(/\s+/g, ''))) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number format. Use format: +919876543210"
+      });
+    }
+
+    // Auto-fill defaults
+    const customerName = name || "Customer";
+    const customerEmail = `${phone.replace(/\D/g, '')}@aisensy.com`;
+    
+    // Get default service if not provided
+    let selectedService = null;
+    if (service) {
+      selectedService = await PopularService.findOne({ 
+        name: { $regex: new RegExp(service, 'i') },
+        isActive: true 
+      });
+    }
+    
+    // If no service found or not provided, get first available service
+    if (!selectedService) {
+      selectedService = await PopularService.findOne({ isActive: true }).sort({ order: 1 });
+    }
+
+    if (!selectedService) {
+      return res.status(500).json({
+        success: false,
+        message: "No services available. Please contact support."
+      });
+    }
+
+    // Auto-calculate amount
+    const serviceAmount = amount ? parseFloat(amount) : selectedService.basePrice || 500;
+    if (isNaN(serviceAmount) || serviceAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid amount. Must be a positive number"
+      });
+    }
+
+    // Auto-generate booking details with smart defaults
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const scheduledDate = tomorrow.toISOString().split('T')[0]; // Tomorrow's date
+    const scheduledTime = "10:00"; // Default morning time
+    
+    // Find or create user
+    let user = await User.findOne({ phone: phone });
+    
+    if (!user) {
+      console.log("   Creating new user for phone:", phone);
+      user = new User({
+        name: customerName,
+        phone: phone,
+        email: customerEmail,
+        isVerified: true,
+        createdVia: "aisensy"
+      });
+      await user.save();
+      console.log("   New user created with ID:", user._id);
+    } else {
+      console.log("   Existing user found with ID:", user._id);
+      // Update user name if provided and different
+      if (name && user.name !== customerName) {
+        user.name = customerName;
+        await user.save();
+      }
+    }
+
+    console.log("   Using service:", selectedService.name, "ID:", selectedService._id);
+
+    // Create booking with minimal required data
+    const booking = new Booking({
+      user: user._id,
+      popularService: selectedService._id,
+      serviceName: selectedService.name,
+      customerDetails: {
+        name: customerName,
+        email: customerEmail,
+        phone: phone
+      },
+      scheduledDate: tomorrow,
+      scheduledTime: scheduledTime,
+      location: {
+        address: "Address to be confirmed", // Default placeholder
+        landmark: "",
+        pincode: ""
+      },
+      amount: serviceAmount,
+      totalAmount: serviceAmount,
+      status: "pending",
+      paymentMode: "cash",
+      paymentStatus: "pending",
+      specialInstructions: "Booking created via AiSensy - details to be confirmed",
+      selectedAddOns: [], // No add-ons in simple booking
+      createdVia: "aisensy-simple"
+    });
+
+    await booking.save();
+
+    // Populate booking for response
+    const populatedBooking = await Booking.findById(booking._id)
+      .populate("popularService")
+      .populate("user", "name phone email");
+
+    console.log("   Simple booking created successfully with ID:", booking._id);
+
+    // Send notifications to partners (non-blocking)
+    try {
+      await sendPartnerNotifications(populatedBooking, selectedService);
+    } catch (notificationError) {
+      console.error("   Notification error (non-blocking):", notificationError.message);
+    }
+
+    console.log("🤖 ============================================");
+
+    res.status(201).json({
+      success: true,
+      message: "Simple booking created successfully! Customer will be contacted to confirm details.",
+      data: {
+        bookingId: booking._id,
+        customerId: user._id,
+        customerName: user.name,
+        customerPhone: user.phone,
+        serviceName: selectedService.name,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        scheduledDate: scheduledDate,
+        scheduledTime: scheduledTime,
+        amount: serviceAmount,
+        location: booking.location,
+        createdAt: booking.createdAt,
+        note: "This is a simplified booking. Customer will be contacted to confirm address and other details."
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in createSimpleBooking:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error creating simple booking",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+/**
+ * Ultra-Minimal AiSensy Booking API - Phone Only (No Authentication Required)
+ * This API requires ONLY phone number and auto-fills everything else
+ */
+exports.createMinimalBooking = async (req, res) => {
+  try {
+    console.log("🤖 ============================================");
+    console.log("🤖 AISENSY MINIMAL BOOKING REQUEST");
+    console.log("🤖 ============================================");
+    console.log("   Request Body:", JSON.stringify(req.body, null, 2));
+
+    const { phone } = req.body;
+
+    // Validate only phone number
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Only phone number is required",
+        example: {
+          phone: "+919876543210"
+        }
+      });
+    }
+
+    // Validate phone number format
+    const phoneRegex = /^[\+]?[1-9][\d]{3,14}$/;
+    if (!phoneRegex.test(phone.replace(/\s+/g, ''))) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number format. Use format: +919876543210"
+      });
+    }
+
+    // Get first available service
+    const selectedService = await PopularService.findOne({ isActive: true }).sort({ order: 1 });
+
+    if (!selectedService) {
+      return res.status(500).json({
+        success: false,
+        message: "No services available. Please contact support."
+      });
+    }
+
+    // Auto-generate all details
+    const customerName = "Customer";
+    const customerEmail = `${phone.replace(/\D/g, '')}@aisensy.com`;
+    const serviceAmount = selectedService.basePrice || 500;
+    
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const scheduledDate = tomorrow.toISOString().split('T')[0];
+    const scheduledTime = "10:00";
+    
+    // Find or create user
+    let user = await User.findOne({ phone: phone });
+    
+    if (!user) {
+      user = new User({
+        name: customerName,
+        phone: phone,
+        email: customerEmail,
+        isVerified: true,
+        createdVia: "aisensy"
+      });
+      await user.save();
+      console.log("   New user created with ID:", user._id);
+    } else {
+      console.log("   Existing user found with ID:", user._id);
+    }
+
+    // Create minimal booking
+    const booking = new Booking({
+      user: user._id,
+      popularService: selectedService._id,
+      serviceName: selectedService.name,
+      customerDetails: {
+        name: customerName,
+        email: customerEmail,
+        phone: phone
+      },
+      scheduledDate: tomorrow,
+      scheduledTime: scheduledTime,
+      location: {
+        address: "Address to be confirmed",
+        landmark: "",
+        pincode: ""
+      },
+      amount: serviceAmount,
+      totalAmount: serviceAmount,
+      status: "pending",
+      paymentMode: "cash",
+      paymentStatus: "pending",
+      specialInstructions: "Minimal booking via AiSensy - all details to be confirmed by customer service",
+      selectedAddOns: [],
+      createdVia: "aisensy-minimal"
+    });
+
+    await booking.save();
+
+    console.log("   Minimal booking created successfully with ID:", booking._id);
+
+    // Send notifications (non-blocking)
+    try {
+      await sendPartnerNotifications(booking, selectedService);
+    } catch (notificationError) {
+      console.error("   Notification error (non-blocking):", notificationError.message);
+    }
+
+    console.log("🤖 ============================================");
+
+    res.status(201).json({
+      success: true,
+      message: "Booking created! Our team will contact you shortly to confirm details.",
+      data: {
+        bookingId: booking._id,
+        customerPhone: phone,
+        serviceName: selectedService.name,
+        scheduledDate: scheduledDate,
+        scheduledTime: scheduledTime,
+        amount: serviceAmount,
+        status: "pending",
+        message: "Customer service will call to confirm address and service details"
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in createMinimalBooking:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error creating minimal booking",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+/**
+ * Get all bookings by mobile number (No Authentication Required)
+ */
+exports.getBookingsByPhone = async (req, res) => {
+  try {
+    console.log("🤖 ============================================");
+    console.log("🤖 AISENSY GET BOOKINGS BY PHONE");
+    console.log("🤖 ============================================");
+    console.log("   Request Params:", JSON.stringify(req.params, null, 2));
+
+    const { phone } = req.params;
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required"
+      });
+    }
+
+    // Validate phone number format
+    const phoneRegex = /^[\+]?[1-9][\d]{3,14}$/;
+    if (!phoneRegex.test(phone.replace(/\s+/g, ''))) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number format"
+      });
+    }
+
+    // Find user by phone
+    const user = await User.findOne({ phone: phone });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "No user found with this phone number",
+        data: {
+          phone: phone,
+          bookings: []
+        }
+      });
+    }
+
+    // Get all bookings for this user
+    const bookings = await Booking.find({ user: user._id })
+      .populate("popularService", "name basePrice")
+      .populate("partner", "profile.name profile.phone phone")
+      .sort({ createdAt: -1 }); // Latest first
+
+    // Format bookings for response
+    const formattedBookings = bookings.map(booking => ({
+      bookingId: booking._id,
+      serviceName: booking.popularService?.name || booking.serviceName,
+      status: booking.status,
+      paymentStatus: booking.paymentStatus,
+      scheduledDate: booking.scheduledDate,
+      scheduledTime: booking.scheduledTime,
+      amount: booking.totalAmount || booking.amount,
+      location: booking.location,
+      selectedAddOns: booking.selectedAddOns || [],
+      partnerInfo: booking.partner ? {
+        name: booking.partner.profile?.name,
+        phone: booking.partner.phone
+      } : null,
+      otp: booking.status === 'accepted' ? booking.otp : null,
+      createdAt: booking.createdAt,
+      updatedAt: booking.updatedAt,
+      createdVia: booking.createdVia
+    }));
+
+    console.log(`   Found ${formattedBookings.length} bookings for phone: ${phone}`);
+    console.log("🤖 ============================================");
+
+    res.status(200).json({
+      success: true,
+      data: {
+        customerPhone: phone,
+        customerName: user.name,
+        totalBookings: formattedBookings.length,
+        bookings: formattedBookings
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in getBookingsByPhone:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching bookings",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+/**
+ * Get all available customer actions (No Authentication Required)
+ */
+exports.getCustomerActions = async (req, res) => {
+  try {
+    const customerActions = [
+      {
+        action: "create-booking",
+        method: "POST",
+        endpoint: "/api/aisensy/customer/create-booking",
+        description: "Create a new booking with full details",
+        requiredFields: ["customerPhone", "customerName", "serviceName", "scheduledDate", "scheduledTime", "locationAddress", "amount"],
+        optionalFields: ["customerEmail", "serviceId", "addOnNames", "locationLandmark", "locationPincode", "paymentMode", "specialInstructions", "lat", "lng"]
+      },
+      {
+        action: "simple-booking",
+        method: "POST", 
+        endpoint: "/api/aisensy/simple-booking",
+        description: "Create booking with minimal data (auto-fills missing details)",
+        requiredFields: ["phone"],
+        optionalFields: ["name", "service", "amount"]
+      },
+      {
+        action: "minimal-booking",
+        method: "POST",
+        endpoint: "/api/aisensy/minimal-booking", 
+        description: "Create booking with phone only (everything auto-filled)",
+        requiredFields: ["phone"],
+        optionalFields: []
+      },
+      {
+        action: "cancel-booking",
+        method: "PUT",
+        endpoint: "/api/aisensy/customer/cancel-booking",
+        description: "Cancel a booking (within 2 hours of creation)",
+        requiredFields: ["bookingId", "customerPhone", "cancellationReason"],
+        optionalFields: []
+      },
+      {
+        action: "submit-review",
+        method: "POST",
+        endpoint: "/api/aisensy/customer/submit-review",
+        description: "Submit review for completed booking",
+        requiredFields: ["bookingId", "customerPhone", "rating", "comment"],
+        optionalFields: []
+      },
+      {
+        action: "quotation-action",
+        method: "PUT",
+        endpoint: "/api/aisensy/customer/quotation-action",
+        description: "Accept or reject partner quotation",
+        requiredFields: ["quotationId", "customerPhone", "action"],
+        optionalFields: ["rejectionReason"]
+      },
+      {
+        action: "initiate-payment",
+        method: "POST",
+        endpoint: "/api/aisensy/payu/initiate-payment",
+        description: "Initiate PayU payment for booking",
+        requiredFields: ["bookingId", "customerPhone", "customerName", "amount"],
+        optionalFields: ["customerEmail", "productInfo"]
+      },
+      {
+        action: "get-bookings",
+        method: "GET",
+        endpoint: "/api/aisensy/customer/bookings/{phone}",
+        description: "Get all bookings by phone number",
+        requiredFields: ["phone"],
+        optionalFields: []
+      },
+      {
+        action: "get-booking-status",
+        method: "GET",
+        endpoint: "/api/aisensy/booking/{bookingId}/status",
+        description: "Get specific booking status",
+        requiredFields: ["bookingId"],
+        optionalFields: []
+      },
+      {
+        action: "check-payment-status",
+        method: "GET",
+        endpoint: "/api/aisensy/payu/payment-status/{txnid}",
+        description: "Check payment status by transaction ID",
+        requiredFields: ["txnid"],
+        optionalFields: []
+      }
+    ];
+
+    res.status(200).json({
+      success: true,
+      message: "Available customer actions",
+      data: {
+        totalActions: customerActions.length,
+        actions: customerActions
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in getCustomerActions:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching customer actions",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+/**
+ * Get all available partner actions (No Authentication Required)
+ */
+exports.getPartnerActions = async (req, res) => {
+  try {
+    const partnerActions = [
+      {
+        action: "create-partner-booking",
+        method: "POST",
+        endpoint: "/api/aisensy/partner/create-booking",
+        description: "Create booking and assign directly to partner",
+        requiredFields: ["partnerPhone", "customerPhone", "customerName", "serviceName", "scheduledDate", "scheduledTime", "locationAddress", "amount"],
+        optionalFields: ["customerEmail", "serviceId", "addOnNames", "locationLandmark", "locationPincode", "paymentMode", "specialInstructions", "lat", "lng"]
+      },
+      {
+        action: "accept-booking",
+        method: "PUT",
+        endpoint: "/api/aisensy/partner/accept-booking",
+        description: "Accept a pending booking",
+        requiredFields: ["bookingId", "partnerPhone"],
+        optionalFields: []
+      },
+      {
+        action: "reject-booking",
+        method: "PUT",
+        endpoint: "/api/aisensy/partner/reject-booking",
+        description: "Reject a booking assignment",
+        requiredFields: ["bookingId", "partnerPhone", "rejectionReason"],
+        optionalFields: []
+      },
+      {
+        action: "complete-booking",
+        method: "PUT",
+        endpoint: "/api/aisensy/partner/complete-booking",
+        description: "Complete booking using customer OTP",
+        requiredFields: ["bookingId", "partnerPhone", "otp"],
+        optionalFields: ["remark"]
+      },
+      {
+        action: "create-quotation",
+        method: "POST",
+        endpoint: "/api/aisensy/partner/create-quotation",
+        description: "Create quotation for additional work",
+        requiredFields: ["bookingId", "partnerPhone", "items", "totalAmount"],
+        optionalFields: ["notes"]
+      },
+      {
+        action: "get-partner-bookings",
+        method: "GET",
+        endpoint: "/api/aisensy/partner/bookings/{partnerPhone}",
+        description: "Get all bookings assigned to partner",
+        requiredFields: ["partnerPhone"],
+        optionalFields: []
+      }
+    ];
+
+    res.status(200).json({
+      success: true,
+      message: "Available partner actions",
+      data: {
+        totalActions: partnerActions.length,
+        actions: partnerActions
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in getPartnerActions:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching partner actions",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+/**
+ * Get all bookings assigned to a partner (No Authentication Required)
+ */
+exports.getPartnerBookings = async (req, res) => {
+  try {
+    console.log("🤖 ============================================");
+    console.log("🤖 AISENSY GET PARTNER BOOKINGS");
+    console.log("🤖 ============================================");
+    console.log("   Request Params:", JSON.stringify(req.params, null, 2));
+
+    const { partnerPhone } = req.params;
+
+    if (!partnerPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Partner phone number is required"
+      });
+    }
+
+    // Validate phone number format
+    const phoneRegex = /^[\+]?[1-9][\d]{3,14}$/;
+    if (!phoneRegex.test(partnerPhone.replace(/\s+/g, ''))) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number format"
+      });
+    }
+
+    // Find partner by phone
+    const partner = await Partner.findOne({ phone: partnerPhone });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "No partner found with this phone number",
+        data: {
+          partnerPhone: partnerPhone,
+          bookings: []
+        }
+      });
+    }
+
+    // Get all bookings assigned to this partner
+    const bookings = await Booking.find({ partner: partner._id })
+      .populate("popularService", "name basePrice")
+      .populate("user", "name phone email")
+      .sort({ createdAt: -1 }); // Latest first
+
+    // Format bookings for response
+    const formattedBookings = bookings.map(booking => ({
+      bookingId: booking._id,
+      serviceName: booking.popularService?.name || booking.serviceName,
+      status: booking.status,
+      paymentStatus: booking.paymentStatus,
+      scheduledDate: booking.scheduledDate,
+      scheduledTime: booking.scheduledTime,
+      amount: booking.totalAmount || booking.amount,
+      location: booking.location,
+      selectedAddOns: booking.selectedAddOns || [],
+      customerInfo: {
+        name: booking.user?.name,
+        phone: booking.user?.phone,
+        email: booking.user?.email
+      },
+      otp: booking.status === 'accepted' ? booking.otp : null,
+      acceptedAt: booking.acceptedAt,
+      completedAt: booking.completedAt,
+      createdAt: booking.createdAt,
+      updatedAt: booking.updatedAt,
+      createdVia: booking.createdVia
+    }));
+
+    console.log(`   Found ${formattedBookings.length} bookings for partner: ${partnerPhone}`);
+    console.log("🤖 ============================================");
+
+    res.status(200).json({
+      success: true,
+      data: {
+        partnerPhone: partnerPhone,
+        partnerName: partner.profile?.name,
+        totalBookings: formattedBookings.length,
+        bookings: formattedBookings
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in getPartnerBookings:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching partner bookings",
+      error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
+    });
+  }
+};
+
+/**
+ * Get all available actions (both customer and partner) (No Authentication Required)
+ */
+exports.getAllActions = async (req, res) => {
+  try {
+    const allActions = {
+      customer: [
+        {
+          action: "create-booking",
+          method: "POST",
+          endpoint: "/api/aisensy/customer/create-booking",
+          description: "Create a new booking with full details",
+          category: "booking"
+        },
+        {
+          action: "simple-booking", 
+          method: "POST",
+          endpoint: "/api/aisensy/simple-booking",
+          description: "Create booking with minimal data",
+          category: "booking"
+        },
+        {
+          action: "minimal-booking",
+          method: "POST", 
+          endpoint: "/api/aisensy/minimal-booking",
+          description: "Create booking with phone only",
+          category: "booking"
+        },
+        {
+          action: "cancel-booking",
+          method: "PUT",
+          endpoint: "/api/aisensy/customer/cancel-booking", 
+          description: "Cancel a booking",
+          category: "booking"
+        },
+        {
+          action: "submit-review",
+          method: "POST",
+          endpoint: "/api/aisensy/customer/submit-review",
+          description: "Submit review for completed booking",
+          category: "review"
+        },
+        {
+          action: "quotation-action",
+          method: "PUT",
+          endpoint: "/api/aisensy/customer/quotation-action",
+          description: "Accept or reject partner quotation",
+          category: "quotation"
+        },
+        {
+          action: "initiate-payment",
+          method: "POST",
+          endpoint: "/api/aisensy/payu/initiate-payment",
+          description: "Initiate PayU payment",
+          category: "payment"
+        },
+        {
+          action: "get-bookings",
+          method: "GET",
+          endpoint: "/api/aisensy/customer/bookings/{phone}",
+          description: "Get all customer bookings",
+          category: "information"
+        }
+      ],
+      partner: [
+        {
+          action: "create-partner-booking",
+          method: "POST",
+          endpoint: "/api/aisensy/partner/create-booking",
+          description: "Create and assign booking to partner",
+          category: "booking"
+        },
+        {
+          action: "accept-booking",
+          method: "PUT", 
+          endpoint: "/api/aisensy/partner/accept-booking",
+          description: "Accept a pending booking",
+          category: "booking"
+        },
+        {
+          action: "reject-booking",
+          method: "PUT",
+          endpoint: "/api/aisensy/partner/reject-booking", 
+          description: "Reject a booking assignment",
+          category: "booking"
+        },
+        {
+          action: "complete-booking",
+          method: "PUT",
+          endpoint: "/api/aisensy/partner/complete-booking",
+          description: "Complete booking with OTP",
+          category: "booking"
+        },
+        {
+          action: "create-quotation",
+          method: "POST",
+          endpoint: "/api/aisensy/partner/create-quotation",
+          description: "Create quotation for additional work",
+          category: "quotation"
+        },
+        {
+          action: "get-partner-bookings",
+          method: "GET",
+          endpoint: "/api/aisensy/partner/bookings/{partnerPhone}",
+          description: "Get all partner bookings",
+          category: "information"
+        }
+      ],
+      general: [
+        {
+          action: "get-services",
+          method: "GET",
+          endpoint: "/api/aisensy/services",
+          description: "Get all available services",
+          category: "information"
+        },
+        {
+          action: "get-booking-status",
+          method: "GET",
+          endpoint: "/api/aisensy/booking/{bookingId}/status",
+          description: "Get booking status by ID",
+          category: "information"
+        },
+        {
+          action: "check-payment-status",
+          method: "GET", 
+          endpoint: "/api/aisensy/payu/payment-status/{txnid}",
+          description: "Check payment status",
+          category: "payment"
+        }
+      ]
+    };
+
+    const totalActions = allActions.customer.length + allActions.partner.length + allActions.general.length;
+
+    res.status(200).json({
+      success: true,
+      message: "All available AiSensy API actions",
+      data: {
+        totalActions: totalActions,
+        customerActions: allActions.customer.length,
+        partnerActions: allActions.partner.length,
+        generalActions: allActions.general.length,
+        actions: allActions
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error in getAllActions:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching all actions",
       error: process.env.NODE_ENV === "development" ? error.message : "Internal server error"
     });
   }

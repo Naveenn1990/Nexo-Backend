@@ -29,6 +29,25 @@ const bookingSchema = new mongoose.Schema(
       ref: "PopularService",
       required: false
     },
+    // Selected add-ons for AiSensy bookings
+    selectedAddOns: [{
+      addOnId: {
+        type: mongoose.Schema.Types.ObjectId
+      },
+      name: {
+        type: String
+      },
+      description: {
+        type: String
+      },
+      basePrice: {
+        type: Number,
+        default: 0
+      },
+      price: {
+        type: String
+      }
+    }],
     // New fields for service booking flow
     serviceName: { type: String },
     serviceData: { type: mongoose.Schema.Types.Mixed },

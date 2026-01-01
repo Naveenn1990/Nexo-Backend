@@ -5,16 +5,7 @@
   "main": "app.js",
   "scripts": {
     "start": "nodemon app.js",
-    "dev": "nodemon app.js",
-    "create-super-admin": "node scripts/createSuperAdmin.js",
-    "seed-popular-services": "node scripts/seedPopularServices.js",
-    "seed-categories": "node scripts/seedCategories.js",
-    "seed-subscription-plans": "node scripts/seedSubscriptionPlans.js",
-    "add-subscription-plans-api": "node scripts/addSubscriptionPlansViaAPI.js",
-    "add-subscription-plans-db": "node scripts/addSubscriptionPlansViaAPI.js --direct-db",
-    "seed-amc-plans": "node scripts/seedAMCPlans.js",
-    "seed-featured-reviews": "node scripts/seedFeaturedReviews.js",
-    "seed-material-categories": "node scripts/seedMaterialCategories.js"
+    "dev": "nodemon app.js"
   },
   "dependencies": {
     "@googlemaps/google-maps-services-js": "^3.4.1",
